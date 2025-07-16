@@ -1,0 +1,144 @@
+---
+title: "comparisons with literature"
+author: "Aina Martí-Aranda"
+date: "June 2025"
+output:
+  html_document:
+    toc: true
+    theme: cerulean
+    toc_float: true
+    toc_collapsed: true
+---
+# initializing
+```{r setup}
+base_dir<-"/Users/aa33/Library/CloudStorage/OneDrive-WellcomeSangerInstitute/001-Projects/03-PDZ_Homologs/02-DryLab/001-data_analysis/data_analysis_github/"
+knitr::opts_knit$set(root.dir = base_dir)
+setwd(base_dir)
+
+# load some variables
+load('source_variables.RData')
+```
+
+## libraries used for the analysis
+```{r message=FALSE, warning=FALSE}
+library(car)
+library(systemfonts)
+library(plyr)
+library(ggiraph)
+library(ggiraphExtra)
+library(rstatix)
+library(data.table)
+library(dplyr)
+library(seqinr)
+library(stringr)
+library(ggplot2)
+library(Matrix)
+library(viridis)
+library(ggpubr)
+library(readxl)
+library(stringi)
+library(GGally)
+library(readxl)
+library(modelr)
+library(cowplot)
+library(Hmisc)
+library(ggrepel)
+library(dplyr) 
+library(ddpcr)
+library(ggpointdensity)
+library(tidyr)
+library(magick)
+library(ggpointdensity)
+library(ggpmisc)
+library(ggridges)
+library(R.matlab)
+```
+
+# load the data
+
+```{r}
+all_ddg_table<-as.data.table(read.csv(paste0("tmp_tables/all_ddg_table.csv")))
+all_median_ddg_table<-as.data.table(read.csv(paste0("tmp_tables/all_median_ddg_table.csv")))
+pdb_metrics_dt<-as.data.table(read.csv("data/annotations/structure_metrics.csv", sep=" "))
+aln_table<-as.data.table(read.table(paste0("data/annotations/structural_alignment_tcoffee.csv")))
+get_contacts_dt<-as.data.table(read.csv("data/annotations/tmp_files/contacts_table_complete.csv", sep=","))
+BI_hotspots_dt<-fread(paste0("tmp_tables/BI_hotspots_dt.csv"))
+all_allo_table<-as.data.table(read.csv("tmp_tables/allostery_individualCurves_mutationLevel_noBI.csv", sep=" "))
+load(paste0("tmp_tables/all_bi.Rdata"))
+load(paste0("tmp_tables/core_bi.Rdata"))
+load(paste0("tmp_tables/BI_hotspots.Rdata"))
+```
+
+# load literature data
+
+## Salinas_2018 (PDZ2-NMDAR2A)
+```{r}
+Salinas_2018<-readMat(paste0("data/external_data/Salinas_Ranganathan_data.mat"), fixNames=F)
+# This is the one I want
+Salinas_2018_pdz2<-Salinas_2018$pdz2
+Salinas_2018_pdz3<-Salinas_2018$pdz3
+single_dG_Salinas_2018_pdz2<-as.data.table(Salinas_2018_pdz2[[7]])
+#table_ddg_Salinas_2018_pdz2<-as.data.table(Salinas_2018_pdz2[[9]])
+single_dG_Salinas_2018_pdz3<-as.data.table(Salinas_2018_pdz3[[10]])
+#table_ddg_Salinas_2018_pdz3<-as.data.table(Salinas_2018_pdz3[[12]])
+
+# adapt this data to my data
+# the alpha helix starts at DLG4-PDZ2 position 69
+# the alphabetic order is for the 3 letter code
+aa_3letter<-toupper(aaa(aa_order[1:20]))
+aa_3letter_order<-aa_order[order(aa_3letter)]
+aa_alphabetic_order<-aa_3letter_order
+#single_dG_Salinas_2018_pdz2[, aa_mut:=aa_alphabetic_order]
+
+
+
+colnames(single_dG_Salinas_2018_pdz2)<-as.character(extract_numeric(colnames(single_dG_Salinas_2018_pdz2))+62-1)
+single_dG_Salinas_2018_pdz2_long<-as.data.table(t(single_dG_Salinas_2018_pdz2))
+colnames(single_dG_Salinas_2018_pdz2_long)<-aa_alphabetic_order
+single_dG_Salinas_2018_pdz2_long$position<-seq(69, 69+8)
+single_dG_Salinas_2018_pdz2_long<-melt(single_dG_Salinas_2018_pdz2_long, id.vars = "position")
+
+colnames(single_dG_Salinas_2018_pdz2_long)<-c("Pos", "Mut",  "Salinas_2018_single_dG")
+
+all_ddg_table[,Mut:=substr(id, nchar(id), nchar(id))]
+single_dG_Salinas_2018_pdz2_long_wddG<-left_join(single_dG_Salinas_2018_pdz2_long, all_ddg_table[library=="psd95_pdz2_nmdar2a"], by=c("Pos", "Mut"))
+single_dG_Salinas_2018_pdz2_long_wddG<-single_dG_Salinas_2018_pdz2_long_wddG[,c("Salinas_2018_single_dG", "Mut", "Pos", "ddg", "std_ddg")]
+
+ggplot(single_dG_Salinas_2018_pdz2_long_wddG,aes(x=Salinas_2018_single_dG, y=ddg))+
+  geom_point(alpha=0.5, size=2)+
+  theme_classic()+
+  geom_errorbar(aes(ymin = ddg - std_ddg, ymax = ddg + std_ddg), width = 0.1, alpha = 0.3) +
+  #stat_poly_eq() +
+  stat_poly_line(color="green3", fill="green", alpha=0.5) +
+  stat_cor(method="pearson",color="black", face="bold")+
+  ylab("∆∆Gb doubledeepPCA")+ggtitle("PSD95-PDZ2 | NMDAR2A")
+
+ggsave(paste0("Figs/Fig2/Fig2Bvalidations_salinas_pdz2_nmdar2a.png"), width=3, height=3)
+
+
+colnames(single_dG_Salinas_2018_pdz3)<-as.character(extract_numeric(colnames(single_dG_Salinas_2018_pdz3))+62-1)
+single_dG_Salinas_2018_pdz3_long<-as.data.table(t(single_dG_Salinas_2018_pdz3))
+colnames(single_dG_Salinas_2018_pdz3_long)<-aa_alphabetic_order
+single_dG_Salinas_2018_pdz3_long$position<-seq(62, 62+8)
+single_dG_Salinas_2018_pdz3_long<-melt(single_dG_Salinas_2018_pdz3_long, id.vars = "position")
+
+colnames(single_dG_Salinas_2018_pdz3_long)<-c("Pos", "Mut",  "Salinas_2018_single_dG")
+
+single_dG_Salinas_2018_pdz3_long_wddG<-left_join(single_dG_Salinas_2018_pdz3_long, all_ddg_table[library=="psd95_pdz3_cript"], by=c("Pos", "Mut"))
+
+
+ggplot(single_dG_Salinas_2018_pdz3_long_wddG,aes(x=Salinas_2018_single_dG, y=ddg))+
+  geom_point(alpha=0.5)+
+  theme_classic()+
+  geom_errorbar(aes(ymin = ddg - std_ddg, ymax = ddg + std_ddg), width = 0.1, alpha = 0.3) +
+  #stat_poly_eq() +
+  ylab("∆∆Gb doubledeepPCA")+
+  stat_poly_line(color="green3", fill="green", alpha=0.5) +
+  stat_cor(method="pearson",color="black")+
+  ggtitle("PSD95-PDZ3 | CRIPT")
+
+ggsave(paste0("Figs/Fig2/Fig2Bvalidations_salinas_pdz3_cript.png"), width=3, height=3)
+
+
+```
+

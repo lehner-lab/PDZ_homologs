@@ -1,0 +1,173 @@
+---
+title: "Preparing files for mochi"
+author: "Aina Martí-Aranda"
+date: "June 2025"
+output:
+  html_document:
+    toc: true
+    theme: cerulean
+    toc_float: true
+    toc_collapsed: true
+---
+
+# initializing
+this script will join the data from the two blocks by adding the other half of the sequence to the variants. 
+This will be used by mochi to run the joint model
+
+```{r setup}
+base_dir<-"/Users/aa33/Library/CloudStorage/OneDrive-WellcomeSangerInstitute/001-Projects/03-PDZ_Homologs/02-DryLab/001-data_analysis/data_analysis_github/"
+knitr::opts_knit$set(root.dir = base_dir)
+setwd(base_dir)
+
+# load some variables
+load('source_variables.RData')
+```
+
+## libraries used for the analysis
+```{r, warning=F, results='hide', message=FALSE}
+library(car)
+library(systemfonts)
+library(plyr)
+library(ggiraph)
+library(ggiraphExtra)
+library(rstatix)
+library(data.table)
+library(dplyr)
+library(seqinr)
+library(stringr)
+library(ggplot2)
+library(Matrix)
+library(viridis)
+library(ggpubr)
+library(readxl)
+library(stringi)
+library(GGally)
+library("readxl")
+library(modelr)
+library(cowplot)
+library(Hmisc)
+library(ggrepel)
+library(dplyr) 
+library(ddpcr)
+library(ggpointdensity)
+library(ggpmisc)
+```
+
+# variables
+```{r}
+# Add sequences to the end and start
+add_sequence_end <- c(
+  "PRRIVIHRGSTGLGFNIVGGEDGEGIFISFILAGGPADLSGELRKGDQILSVNGVDLRNASHEQAAIALKNAG",
+  "KVMEIKLIKGPKGLGFSIAGGVGNQHIPGDNSIYVTKIIEGGAAH",
+  "MNGGVQTWTQPRLCYLVKEGGSYGFSLKTVQGKKGVYMTDITPQGVAMRAGVLAD",
+  "MTSTFNPRECKLSKQEGQNYGFFLRIEKDTEGHLVRVVEKCSPAEKAGLQDGD",
+  "EIRVRVEKDPELGFSISGGVGGRGNPFRPDDDGIFVTRVQPEGPA"
+)
+
+add_sequence_start <- c(
+  "DLRNASHEQAAIALKNAGQTVTIIAQYKPE*",
+  "QIGDKILAVNSVGLEDVMHEDAVAALKNTYDVVYLKVAKP*",
+  "VNGENVEDASHEEVVEKVKKSGSRVMFLLVDKETDKRHVEQKIQFKRETAS*",
+  "NGVFVDKEEHMQVVDLVRKSGNSVTLLVLDGDSYEKAVKTRVDLKELG*",
+  "PGDKIIQANGYSFINIEHGQAVSLLKTFQNTVELIIVREV*"
+)
+```
+
+
+# modify all variants file for mochi
+```{r, warning=FALSE}
+all_data_b1_b2<-data.table()
+
+# Loop through libraries
+for (lib in libraries_names) {
+  print(lib)
+  
+  pdz_ <- substr(lib, 1, 3)  # Get PDZ identifier
+  
+  ## ---- load block2 -----
+  if (is.na(str_extract(lib, "psd95_pdz3"))) {
+    block2_data_path<-list.files(path = paste0("data/DiMSum/block2/", lib), pattern = "_corrected_counts_fitness_replicates\\.RData$", full.names = TRUE)
+    load(block2_data_path)
+    data_b2 <- all_variants
+  }
+  
+  # ADD synonymous variants
+  if (!is.na(str_extract(lib, "psd95_pdz2"))) {
+    syn_variants_path <- paste0("data/DiMSum/block2/", lib, "/fitness_synonymous.txt")
+    syn_variants <- fread(syn_variants_path, na.strings = "NA")[, WT := ifelse(is.na(WT), FALSE, WT)]
+    #colnames(syn_variants)[replicate_cols] <- c("R1", "R2", "R3")
+    data_b2 <- rbind(data_b2, syn_variants[WT == FALSE])
+  }
+  
+  ## ---- load block1 -----
+  if(!is.na(str_extract(lib, "psd95_pdz3"))){
+    block1_data_path<-list.files(path = paste0("data/DiMSum/block1/", lib), pattern = "_corrected_counts_fitness_replicates\\.txt$", full.names = TRUE)
+    all_variants<-data.table(fread(block1_data_path))
+  }
+  else{block1_data_path<-list.files(path = paste0("data/DiMSum/block1/", lib), pattern = "_corrected_counts_fitness_replicates\\.RData$", full.names = TRUE)
+  load(block1_data_path)}
+  
+  data_b1<-all_variants
+  
+  # ADD synonymous variants
+  if (is.na(str_extract(lib, "psd95_pdz3"))) {
+    syn_variants_path <- paste0("data/DiMSum/block1/", lib, "/fitness_synonymous.txt")
+    syn_variants <- fread(syn_variants_path, na.strings = "NA")[, WT := ifelse(is.na(WT), FALSE, WT)]
+    #colnames(syn_variants)[replicate_cols] <- c("R1", "R2", "R3")
+    data_b1 <- rbind(data_b1, syn_variants[WT == FALSE])
+  }
+  
+  # Modify sequences if not psd95_pdz3
+  match_index <- which(sapply(tolower(pdz_names), function(x) grepl(x, tolower(lib))))
+  print(match_index)
+  if (is.na(str_extract(lib, "psd95_pdz3"))) {
+    if (is.na(str_extract(lib, "psd95_pdz3"))) {
+      data_b2[, aa_seq := paste0(add_sequence_end[match_index], aa_seq)]
+    }
+    
+    data_b1[, aa_seq := paste0(aa_seq, add_sequence_start[match_index])]
+    
+    if (!is.na(str_extract(lib, "erbin"))) {
+      data_b2[, aa_seq := paste0(aa_seq, "*")]
+    }
+  }
+  
+  # Remove redundant column
+  data_b1[, X := NULL]
+  if (is.na(str_extract(lib, "psd95_pdz3"))) {data_b2[, X := NULL]}
+  
+  # Save processed files for Mochi
+  if (is.na(str_extract(lib, "psd95_pdz3"))) {
+    fwrite(data_b2, file = paste0("data/inputs_mochi/", lib, "_b2_all_variants.txt"))
+  }
+  
+  fwrite(data_b1, file = paste0("data/inputs_mochi/", lib, "_b1_all_variants.txt"))
+  
+  
+  # Combine data for block 1 and block 2
+  if (is.na(str_extract(lib, "psd95_pdz3"))) {
+    data_b2[, block := 2]
+    data_b1[, block := 1]
+    data_b1_b2 <- rbind(data_b1, data_b2, fill=TRUE)
+  } else {
+    data_b1_b2 <- data_b1
+    data_b1[, block := 0]
+  }
+  
+  # Generate mutation IDs
+  aa_seq_wt <- pdz_sequences_all_aa[match_index]
+  print(aa_seq_wt)
+  data_b1_b2[, mut_id := sapply(aa_seq, find_mutated_list, aa_seq_wt)]
+  
+  data_b1_b2[,library:=lib]
+  data_b1_b2[is.na(WT), WT:=F]
+  all_data_b1_b2<-rbind(all_data_b1_b2, data_b1_b2, fill=TRUE)
+  
+  print(nrow(data_b1_b2[Nham_aa==0 & WT==F & block==1]))
+  print(nrow(data_b1_b2[Nham_aa==0 & WT==F & block==2]))
+}
+
+fwrite(all_data_b1_b2, file = paste0("tmp_tables/fitness_all_variants.txt"))
+  
+
+```

@@ -1,0 +1,165 @@
+---
+title: "Calculate allostery"
+author: "Aina Martí-Aranda"
+date: "June 2025"
+output:
+  html_document:
+    toc: true
+    theme: cerulean
+    toc_float: true
+    toc_collapsed: true
+---
+
+```{r setup}
+base_dir<-"/Users/aa33/Library/CloudStorage/OneDrive-WellcomeSangerInstitute/001-Projects/03-PDZ_Homologs/02-DryLab/001-data_analysis/data_analysis_github/"
+knitr::opts_knit$set(root.dir = base_dir)
+setwd(base_dir)
+
+# load some variables
+load('source_variables.RData')
+```
+
+## libraries used for the analysis
+```{r message=FALSE, warning=FALSE}
+library(car)
+library(systemfonts)
+library(plyr)
+library(ggiraph)
+library(ggiraphExtra)
+library(rstatix)
+library(data.table)
+library(dplyr)
+library(seqinr)
+library(stringr)
+library(ggplot2)
+library(Matrix)
+library(viridis)
+library(ggpubr)
+library(readxl)
+library(stringi)
+library(GGally)
+library(readxl)
+library(modelr)
+library(cowplot)
+library(Hmisc)
+library(ggrepel)
+library(dplyr) 
+library(ddpcr)
+library(ggpointdensity)
+library(tidyr)
+library(magick)
+library(ggpointdensity)
+library(ggpmisc)
+library(ggridges)
+```
+
+
+# load the data
+
+```{r}
+all_ddg_table<-as.data.table(read.csv(paste0("tmp_tables/all_ddg_table.csv")))
+all_ddg_table[is.na(binding_interface_contacts), binding_interface_contacts:=F]
+all_median_ddg_table<-as.data.table(read.csv(paste0("tmp_tables/all_median_ddg_table.csv")))
+all_median_ddg_table[is.na(binding_interface_contacts), binding_interface_contacts:=F]
+```
+
+
+# prepare ddg absolute values
+```{r}
+all_ddg_table_abs<-all_ddg_table
+all_ddg_table_abs[,ddg:=abs(ddg)]
+
+all_median_ddg_table_abs <- all_ddg_table[
+  , .(median_abs_ddg = median(abs(ddg), na.rm = TRUE)),  # Calculate median of ddg
+  by = .(library, structural_alignment_pos, Pos, scHAmin_ligand, binding_interface_contacts, WT_aa)
+]
+
+```
+
+# Individual exponential curves (mutation level - without BI residues) !!!!!
+```{r warning=FALSE}
+
+all_ddg_table_abs_allo_noBI<-data.table()
+all_decay_plots<-list()
+half_d_list<-list()
+
+c=1
+for (lib in libraries_binding_names){
+    
+  print(lib)
+  xvector_starting=all_ddg_table_abs[library==lib & !is.na(scHAmin_ligand)& !is.na(ddg) & binding_interface_contacts==F]$scHAmin_ligand
+    yvector_starting=all_ddg_table_abs[library==lib& !is.na(scHAmin_ligand)& !is.na(ddg)& binding_interface_contacts==F]$ddg
+    
+    all_ddg_table_abs_subset<-all_ddg_table_abs[library==lib]
+    
+    exponential_curve_fitted<-fit_exponential_curve(xvector=xvector_starting,yvector=yvector_starting,tit,plotfig=F,writepar=FALSE)
+    summary(exponential_curve_fitted)
+    exponential_estimate<-summary(exponential_curve_fitted)$coefficients[2]
+    
+    #this model is a*e**bx
+    all_ddg_table_abs_subset[,allo_predicted:=coef(exponential_curve_fitted)[1]*exp(coef(exponential_curve_fitted)[2]*scHAmin_ligand)]
+    all_ddg_table_abs_subset[,coef_individual_curve_a:=coef(exponential_curve_fitted)[1]]
+    all_ddg_table_abs_subset[,coef_individual_curve_b:=coef(exponential_curve_fitted)[2]]
+    half_ddg<-max(abs(all_ddg_table_abs_subset$ddg))
+    a <- coef(exponential_curve_fitted)[1]
+    b <- coef(exponential_curve_fitted)[2]
+
+    half_ddg <- a / 2  # 50% reduction
+    half_d <- log(half_ddg / a) / b
+    print(a)
+    print(b)
+  
+    print(paste0("HALF d: ", half_ddg))
+    #print(paste0("HALF d: ", half_d))
+    
+    all_ddg_table_abs_subset[,half_d:=half_d]
+    half_d_list[[c]]<-half_d
+    
+    
+    all_ddg_table_abs_subset[,allo_decay_residual:=ddg-allo_predicted]
+    all_ddg_table_abs_subset[binding_interface_contacts==T,allo_decay_residual:=NA]
+    all_ddg_table_abs_subset[,label_id:=paste0(WT_aa, structural_alignment_pos)]
+    
+    c=c+1
+    
+    all_ddg_table_abs_subset[,allo_decay_residual:=ddg-allo_predicted]
+    all_ddg_table_abs_subset[,exponential_estimate:=exponential_estimate]
+    all_ddg_table_abs_subset[,allo_decay_pos:=allo_decay_residual>0] # CHANGE THIS TO A TEST
+      
+    all_ddg_table_abs_allo_noBI<-rbind(all_ddg_table_abs_allo_noBI, all_ddg_table_abs_subset)
+}
+
+all_ddg_table_abs_allo_noBI<-left_join(all_ddg_table_abs_allo_noBI, all_ddg_table)
+
+write.table(all_ddg_table_abs_allo_noBI, paste0("tmp_tables/allostery_individualCurves_mutationLevel_noBI.csv"))
+```
+
+## half d calculations
+```{r, fig.width=2, fig.height=2}
+print(unlist(half_d_list))
+summary(unlist(half_d_list))
+ggplot(data.table(unlist(half_d_list)), aes(x=V1))+geom_density(bins=3, size=2, color="blue", fill="blue", alpha=0.3)+theme_classic()+xlab("d 1/2")
+```
+
+```{r, fig.width=13, fig.height=2.5}
+ggplot(all_ddg_table_abs_allo_noBI, aes(x=scHAmin_ligand, y=ddg))+
+  geom_point(data=all_ddg_table_abs_allo_noBI[binding_interface_contacts==F], color="grey20", alpha=0.5, shape=1)+
+  geom_point(data=all_ddg_table_abs_allo_noBI[binding_interface_contacts==T], color="red", alpha=0.5, shape=1)+
+  geom_line(aes(y=allo_predicted, color=library), size=2)+
+  scale_color_brewer(palette="Set2")+
+  facet_grid(~library, scales="free_x")+
+  theme_pubr()+
+  theme(legend.position = "none")
+```
+
+
+
+
+```{r, fig.width=7, fig.height=5}
+ggplot(data.table(all_ddg_table_abs_allo_noBI), aes(x=scHAmin_ligand, y=ddg))+
+      theme_classic()+
+      xlab("minimum distance to the ligand (A)")+
+      ylab("median |∆∆Gb|")+
+  geom_line( aes(x=scHAmin_ligand, y=allo_predicted, group=library, color=library), size=1.2)+
+  scale_color_brewer(palette = "Set2")+ggtitle("fitted at mutation level (WITHOUT BI)")
+```

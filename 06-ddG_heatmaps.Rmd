@@ -1,0 +1,222 @@
+---
+title: "all_ddg tables and ddG heatmaps"
+author: "Aina Martí-Aranda"
+date: "June 2025"
+output:
+  html_document:
+    toc: true
+    theme: cerulean
+    toc_float: true
+    toc_collapsed: true
+---
+
+# initializing 
+```{r setup}
+base_dir<-"/Users/aa33/Library/CloudStorage/OneDrive-WellcomeSangerInstitute/001-Projects/03-PDZ_Homologs/02-DryLab/001-data_analysis/data_analysis_github/"
+knitr::opts_knit$set(root.dir = base_dir)
+setwd(base_dir)
+
+# load some variables
+load('source_variables.RData')
+
+library(data.table)
+aln_table<-as.data.table(read.table(paste0("/Users/aa33/Library/CloudStorage/OneDrive-WellcomeSangerInstitute/001-Projects/03-PDZ_Homologs/02-DryLab/001-data_analysis/data_analysis/01_structures/3DstructureMetrics/01-alignment_positions/", "tcoffee_structural_alignment.csv")))
+
+```
+
+## libraries used for the analysis
+```{r message=FALSE, warning=FALSE}
+library(car)
+library(systemfonts)
+library(plyr)
+library(ggiraph)
+library(ggiraphExtra)
+library(rstatix)
+library(data.table)
+library(dplyr)
+library(seqinr)
+library(stringr)
+library(ggplot2)
+library(Matrix)
+library(viridis)
+library(ggpubr)
+library(readxl)
+library(stringi)
+library(GGally)
+library("readxl")
+library(modelr)
+library(cowplot)
+library(ggpointdensity)
+```
+
+
+# create simpler ∆∆G tables
+```{r}
+all_weights_data <- as.data.table(fread(paste0("tmp_tables/weights_mochi_all.csv"), sep = "\t"))[,-c("V1")]
+pdb_metrics_dt<-as.data.table(read.csv("data/annotations/structure_metrics.csv", sep=" "))
+
+all_weights_data[,pdz:=sub("^([^_]+_[^_]+).*", "\\1", library)]
+all_weights_data[,WT_aa:=substr(id,1,1)]
+all_weights_data<-all_weights_data[id!="WT",] #I do not want the WTs
+
+all_weights_data[assay=="folding",library:=sub("^([^_]+_[^_]+).*", "\\1", library)]
+
+#aggregate to folding
+pdb_metrics_dt[,pdz:=sub("^([^_]+_[^_]+).*", "\\1", library)]
+all_weights_data_f_complete<-left_join(all_weights_data[assay=="folding"], pdb_metrics_dt[nchar(pdz_name)==nchar(library),c("secondary_structure", "rsasa", "structure_location", "consv","pdz", "Pos", "WT_aa", "structural_alignment_pos")], by=c("pdz", "Pos", "WT_aa"))
+
+#aggregate to binidng
+all_weights_data_b_complete<-left_join(all_weights_data[assay=="binding"], pdb_metrics_dt[nchar(pdz_name)!=nchar(library)], by=c("pdz", "Pos", "WT_aa", "library"))
+
+#join both
+all_weights_data_complete<-rbind(all_weights_data_b_complete, all_weights_data_f_complete,fill=TRUE)
+
+
+setnames(all_weights_data_complete, "mean_kcal.mol", "ddg")
+setnames(all_weights_data_complete, "std_kcal.mol", "std_ddg")
+setnames(all_weights_data_complete, "ci95_kcal.mol", "ci95_ddg")
+write.csv(all_weights_data_complete, paste0("tmp_tables/all_ddg_table.csv"))
+```
+
+# saving a clean version of this for supplementary table 5
+```{r}
+# saving a clean version of this for supplementary table 5
+supplementary_table_5<-all_weights_data_complete[, -c("pdz", "core_bi_contacts", "HAmin_ligand", "X1", "X2", "X3", "X4", "X5", "X6", "X7", "X8", "X9", "Pos_ref.x", "Pos_ref.y", "closest_ligand_pos", "closest_ligand_aa", "pdz_name", "alignment_position", "WT", "Pos_ref", "trait_name")]
+supplementary_table_5[is.na(binding_interface_contacts),binding_interface_contacts:=F]
+supplementary_table_5[, Mut:=substr(id, nchar(id), nchar(id))]
+
+start_positions<-c(311, 311, 157, 157, 157, 123, 123, 1,1,1,1321,1321)
+supplementary_table_5[, Pos_ref:=0]
+c=1
+for (lib in libraries){
+  supplementary_table_5[library==lib, Pos_ref:=Pos+start_positions[c]-1]
+  c=c+1
+}
+
+supplementary_table_5$library<-lib_code_to_name(supplementary_table_5$library, libraries, libraries_names)
+
+supplementary_table_5<-supplementary_table_5[,.(library, assay, id, WT_aa, Pos, Pos_ref, Mut, ddg, std_ddg, ci95_ddg, structural_alignment_pos, binding_interface_contacts, binding_interface_5A, scHAmin_ligand, consv, secondary_structure, rsasa, structure_location)]
+setnames(supplementary_table_5, "consv", "sequence_conservation")
+fwrite(supplementary_table_5, "supplementary_tables/Supplementary_table5.txt")
+```
+
+
+
+
+
+# create medians ddg table
+```{r}
+pdb_metrics_dt<-as.data.table(read.csv("data/annotations/structure_metrics.csv", sep=" "))
+pdb_metrics_dt[,pdz:=sub("^([^_]+_[^_]+).*", "\\1", library)]
+
+aggregated_data <- all_weights_data_complete[
+  , .(median_ddg = median(ddg, na.rm = TRUE)),  # Calculate median of ddg
+  by = .(library, structural_alignment_pos, Pos,assay, WT_aa, pdz)
+]
+
+all_weights_data_complete_median<-left_join(aggregated_data, pdb_metrics_dt, by=c("pdz", "Pos", "structural_alignment_pos", "WT_aa", "library"))
+
+write.csv(all_weights_data_complete_median, paste0("tmp_tables/all_median_ddg_table.csv"))
+```
+
+# complete supplementary5 with the medians
+Now I add the medians to the final supplementary table
+```{r}
+supplementary_table_5<-left_join(supplementary_table_5, all_weights_data_complete_median[,.(library, Pos, median_ddg)], by=c("library", "Pos"))
+
+fwrite(supplementary_table_5, "supplementary_tables/Supplementary_table5.txt")
+```
+
+
+# check that all is good by plotting the heatmaps w BI highlighted
+```{r, fig.width=20, fig.height=4}
+all_ddg_table<-as.data.table(read.csv(paste0("tmp_tables/all_median_ddg_table.csv")))
+gg_medians_alignment_heatmap(all_ddg_table)+geom_tile(data = all_ddg_table[binding_interface_contacts==T], fill = "transparent", color="green", size = 0.7)+theme(axis.text.x=element_text(angle=90))
+
+gg_medians_alignment_heatmap(all_ddg_table[nchar(library)==nchar(pdz)], assay_plotted = "folding")+theme(axis.text.x=element_text(angle=90))
+```
+
+# ddG heatmaps
+```{r}
+all_ddg_table<-as.data.table(read.csv(paste0("tmp_tables/all_ddg_table.csv")))
+all_ddg_table[,Mut:=substr(id, nchar(id), nchar(id))]
+all_ddg_table$class<-all_ddg_table$structure_location
+all_ddg_table[binding_interface_5A==T]$class<-"BI"
+all_ddg_table[assay=="binding" & structural_alignment_pos %in% c(24,25,26)]$class<-"CBL"
+
+pdb_metrics_dt$pdz<-as.character(pdb_metrics_dt$pdz)
+all_ddg_table$pdz<-as.character(all_ddg_table$pdz)
+
+
+for(lib in libraries_names){
+  all_ddg_table_subset<-all_ddg_table[library==lib]
+  pdz<-sub("^([^_]+_[^_]+).*", "\\1", lib)
+  
+  start_positions<-c(311, 311, 157, 157, 157, 123, 123, 1,1,1,1321,1321)
+  all_ddg_table_subset[, Pos_ref:=0]
+  all_ddg_table_subset$Pos_ref<-as.numeric(all_ddg_table_subset$Pos_ref)
+  all_ddg_table_subset[, Pos_ref:=Pos+start_positions[which(libraries_names==lib)]-1]
+  
+  
+  all_ddg_table_subset[,Pos:=Pos_ref]
+  if(nchar(pdz)!=nchar(lib)){p<-gg_ddg_heatmap(all_ddg_table_subset[!is.na(Pos)], aa_order2, colors_aa, gsub("_", "-", gsub(" binding ", " | ", libraries_names[which(libraries==lib)])))}
+  
+  else{
+    p<-gg_ddg_heatmap(all_ddg_table_subset[!is.na(Pos)], aa_order2, colors_aa, gsub("_", "-", gsub(" binding ", " | ", libraries_names_plots[which(libraries_names==lib)])))+
+  theme(legend.position = "right")
+  }
+    
+  p+theme(legend.position="none", axis.text.x=element_text(size=22, face="bold"),axis.text.y=element_text(size=20, face="bold"))
+  ggsave(paste0("Figs/Fig2/ddg_heatmaps/ddG_", lib, "_heatmap.png"), width=18, height=6)
+}
+```
+
+# structure shapes
+create the heatmap
+```{r}
+all_median_ddg_table<-as.data.table(read.csv(paste0("tmp_tables/all_median_ddg_table.csv")))
+#merge(all_median_ddg_table, aln_table)
+
+for(lib in libraries_names){
+  pdz<-sub("^([^_]+_[^_]+).*", "\\1", lib)
+  
+  if(pdz %in% c("psd95_pdz2", "erbin_pdz1")){point_height=1.05}
+  if(pdz %in% c("psd95_pdz3")){point_height=1.03}
+  if(pdz %in% c("nherf3_pdz2")){point_height=1.11}
+  if(pdz %in% c("nherf3_pdz1")){point_height=1.09}
+  
+  ddg_subset<-all_median_ddg_table[library==lib]
+  
+  p<-ggplot(ddg_subset,aes(x=as.factor(Pos), y=factor(library)))+
+    xlab("")+
+    ylab("")+
+    geom_tile(aes(fill=median_ddg), color="black")+ 
+    theme_void(base_size = 16)+
+    scale_x_discrete(limits = seq(1, max(ddg_subset$Pos, na.rm = T), 1))+
+    scale_fill_gradient2(limits=c(-0.8932919, 3.670025),"median ∆∆G",high="red",mid="grey90",low="blue",midpoint=0, na.value = "white")+
+    theme( plot.title = element_text(size=20))+
+    #guides(fill=guide_legend(title="weighted mean \nfitness normalized"))+
+    theme( panel.spacing.x = unit(0.1, "lines"), 
+           legend.position = "none")+#,
+           #strip.text = element_text(size=10)) + 
+    ggtitle(paste0(""))+
+    geom_point(data=ddg_subset[binding_interface_contacts==T], aes(y=point_height), shape=21, fill="red", size=2) 
+  
+  
+  ggsave(paste0("Figs/Fig2/colored_heatmap/", lib, ".png"), width=10, height=1.5)
+}
+```
+Create the shaped heatmap
+```{r}
+library(magick)
+# do not execute for now
+for(lib in libraries_names){
+  print(lib)
+  path_image<-paste0("Figs/Fig2/colored_heatmap/", lib,".png")
+  path_shape<-paste0("data/shapes/", lib, "_shape.png")
+  out_path<-paste0("Figs/Fig2/colored_shapes/", lib, "_median_ddg.png")
+  crop_heatmap_structure_shape_outline(path_image, path_shape, out_path)
+}
+```
+
+

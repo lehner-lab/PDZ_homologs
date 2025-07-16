@@ -1,0 +1,507 @@
+---
+title: "Normalizing fitness"
+author: "Aina Martí-Aranda"
+date: "June 2025"
+output:
+  html_document:
+    toc: true
+    theme: cerulean
+    toc_float: true
+    toc_collapsed: true
+---
+
+
+# initializing
+This script will 
+1. normalize the fitness values between blocks and libraries.
+2. Plots of the overlapping regions (Figure S1B)
+3. Choose alternative backgrounds as WT when there are no singles in some of the blocks.
+
+```{r setup}
+base_dir<-"/Users/aa33/Library/CloudStorage/OneDrive-WellcomeSangerInstitute/001-Projects/03-PDZ_Homologs/02-DryLab/001-data_analysis/data_analysis_github/"
+knitr::opts_knit$set(root.dir = base_dir)
+setwd(base_dir)
+
+# load some variables
+load('source_variables.RData')
+```
+
+# libraries used for the analysis
+```{r, warning=F, results='hide', message=FALSE}
+library(car)
+library(systemfonts)
+library(plyr)
+library(ggiraph)
+library(ggiraphExtra)
+library(rstatix)
+library(data.table)
+library(dplyr)
+library(seqinr)
+library(stringr)
+library(ggplot2)
+library(Matrix)
+library(viridis)
+library(ggpubr)
+library(readxl)
+library(stringi)
+library(GGally)
+library("readxl")
+library(modelr)
+library(cowplot)
+library(Hmisc)
+library(ggrepel)
+library(dplyr) 
+library(ddpcr)
+library(ggpointdensity)
+library(ggpmisc)
+```
+
+
+# normalize between blocks
+I am showing the entire distributions of stop and synonymous variants
+Then I am taking the stops of the overlapping regions + overall synonymous and normalyzing by this
+
+```{r}
+library(ggridges)
+syn_stops_plots<-list()
+syn_stops_plots_norm<-list()
+all_variants_all<-as.data.table(read.table(paste0("tmp_tables/fitness_all_variants.txt"),sep=",", header = T))
+all_variants_all[is.na(WT), WT:=F]
+all_variants_all[,category:="missense"]
+all_variants_all[Nham_aa==0 & WT==F, category:="synonymous"]
+all_variants_all[STOP==T, category:="stop"]
+
+c=1
+for(lib in libraries_names){
+  print(lib)
+  if(is.na(str_extract(lib, "psd95_pdz3"))){
+    both_blocks<-all_variants_all[library==lib]
+    
+    all_syn<-both_blocks[category=="synonymous"]
+    all_stops<-both_blocks[category=="stop"]
+    
+    length_aa<-nchar(all_syn$aa_seq[1]) #total length of the PDZ
+    
+    #get the position of each first stop codon
+    stop_positions<-unlist(lapply(sapply("\\*", gregexpr, lapply(all_stops$aa_seq, substr, 1, length_aa-1)),"[[",1))
+    
+    #add this to the stops table
+    all_stops[,stop_pos:=stop_positions[!stop_positions %in% length_aa]] 
+    b1_s<-all_stops[block==1]
+    b2_s<-all_stops[block==2]
+    
+    # get the overlapping stops present in both blocks
+    overlap_s<-all_stops[stop_pos %in% b1_s$stop_pos & stop_pos %in% b2_s$stop_pos,]
+    syn_stops_overlap<-rbind(overlap_s, all_syn,fill=TRUE)
+    
+  
+    p<-ggplot(syn_stops_overlap[category!="missense"])+
+      geom_density_ridges(aes(x=fitness, y=as.factor(block), fill=category),quantile_lines = TRUE,quantiles = 2, linewidth=1, alpha=0.5)+
+      ylab("block")+
+      theme_classic()+
+      ggtitle(paste0(libraries_names[which(libraries==lib)], "\noverlap variants"))+
+      scale_fill_manual(values=c("red", "green2"))+theme(legend.position = "none")
+    
+    syn_stops_plots[[c]]<-p
+    
+    # prepare data blocks to normalize
+    median_stops_b1<-median(syn_stops_overlap[category=="stop" & block==1]$fitness)
+    median_stops_b2<-median(syn_stops_overlap[category=="stop" & block==2]$fitness)
+    
+    if(length(unique(syn_stops_overlap[block==1]$category))==1){median_syn_b1<-0}
+    else{median_syn_b1<-median(syn_stops_overlap[category=="synonymous" & block==1]$fitness)}
+    if(length(unique(syn_stops_overlap[block==2]$category))==1){median_syn_b2<-0}
+    else{median_syn_b2<-median(syn_stops_overlap[category=="synonymous" & block==2]$fitness)}
+    data<-data.table(b1=c(median_stops_b1, median_syn_b1), b2=c(median_stops_b2, median_syn_b2))
+    
+    #build model
+    model <- lm(b1 ~ b2, data = data)
+    
+    #modify block2 to block1
+    b2_norm<-as.vector(predict(model, data.frame(b2=both_blocks[block==2]$fitness)))
+    b2_std_norm<-as.vector(both_blocks[block==2]$sigma*model$coefficients[2])
+    
+    #save the data in the fitness_norm_blocks column
+    both_blocks$fitness_norm_blocks<-both_blocks$fitness
+    both_blocks[block==2]$fitness_norm_blocks<-b2_norm
+    both_blocks$std_norm_blocks<-both_blocks$sigma
+    both_blocks[block==2]$std_norm_blocks<-b2_std_norm
+      
+    #save the normalized fitness
+    write.table(both_blocks, paste0("tmp_tables/normalize_fitness/blocks_normalized_fitness_", lib, ".csv"))
+    
+    p<-ggplot(both_blocks[category!="missense"])+
+      geom_density_ridges(aes(x=fitness_norm_blocks, y=as.factor(block), fill=category),quantile_lines = TRUE,quantiles = 2, linewidth=1, alpha=0.5)+
+      ylab("block")+
+      theme_classic()+
+      ggtitle(paste0(libraries_names[which(libraries==lib)], "\nall variants"))+
+      scale_fill_manual(values=c("red", "green2", "blue"))+theme(legend.position = "none")
+    
+    syn_stops_plots_norm[[c]]<-p
+    c=c+1
+  }
+  else{
+    #just save the table (only one block = already normalized)
+    both_blocks<-all_variants_all[library==lib]
+    
+    all_syn<-both_blocks[category=="synonymous"]
+    all_stops<-both_blocks[category=="stop"]
+    both_blocks$fitness_norm_blocks<-both_blocks$fitness
+    write.table(both_blocks, paste0("tmp_tables/normalize_fitness/blocks_normalized_fitness_", lib, ".csv"))
+  }
+}
+
+plot_grid(plotlist=syn_stops_plots, ncol=5)
+plot_grid(plotlist=syn_stops_plots_norm, ncol=5)
+```
+
+# normalize between libraries
+I will normalize all to 762_809 as it had a very nice dynamic range and fitness correlations
+
+```{r}
+#reference data
+syn_stops_plots_norm<-list()
+reference_lib<-"psd95_pdz2_nmdar2a"
+block_norm_fitness_dt_ref<-as.data.table(read.table(paste0("tmp_tables/normalize_fitness/blocks_normalized_fitness_", reference_lib, ".csv")))
+ref_stops_median<-median(block_norm_fitness_dt_ref[category=="stop"]$fitness_norm_blocks, na.rm = T)
+ref_syn_median<-median(block_norm_fitness_dt_ref[category=="synonymous"]$fitness_norm_blocks, na.rm = T)
+tables_all<-data.table()
+
+plots_norm<-list()
+c=1
+for(lib in libraries_names){
+  pdz_=substr(lib, 1,3)
+  if(lib!=reference_lib){
+    print(lib)
+    
+    #prepare data
+    block_norm_fitness_dt<-as.data.table(read.table(paste0("tmp_tables/normalize_fitness/blocks_normalized_fitness_", lib, ".csv")))
+    stops_median<-median(block_norm_fitness_dt[category=="stop"]$fitness_norm_blocks)
+    syn_median<-median(block_norm_fitness_dt[category=="synonymous"]$fitness_norm_blocks)
+    if(is.na(syn_median)){syn_median<-0}
+    data<-data.table(f1=c(ref_stops_median, ref_syn_median), f2=c(stops_median, syn_median))
+    
+    #prepare model
+    model <- lm(f1 ~ f2, data = data)
+    
+    #modify library2 to library1
+    f2_norm<-as.vector(predict(model, data.frame(f2=block_norm_fitness_dt$fitness_norm_blocks)))
+    f2_std_norm<-as.vector(block_norm_fitness_dt$std_norm_blocks*model$coefficients[2])
+    
+    block_norm_fitness_dt$fitness_norm<-f2_norm
+    block_norm_fitness_dt$std_norm<-f2_std_norm
+    block_norm_fitness_dt$library<-lib
+    
+    #save new data
+    write.table(block_norm_fitness_dt, paste0("tmp_tables/normalize_fitness/libraries_normalized_fitness_", lib, ".csv"))
+    
+    c=c+1
+    
+    tables_all<-rbind(tables_all, block_norm_fitness_dt, fill=T)
+    
+  }
+  else{ #reference lib: just save the table without normalizing
+    block_norm_fitness_dt<-as.data.table(read.table(paste0("tmp_tables/normalize_fitness/blocks_normalized_fitness_", lib, ".csv")))
+    block_norm_fitness_dt$fitness_norm<-block_norm_fitness_dt$fitness_norm_blocks
+    block_norm_fitness_dt$std_norm<-block_norm_fitness_dt$std_norm_blocks
+    block_norm_fitness_dt$library<-lib
+    
+    write.table(block_norm_fitness_dt, paste0("tmp_tables/normalize_fitness/libraries_normalized_fitness_", lib, ".csv"))
+    tables_all<-rbind(tables_all, block_norm_fitness_dt, fill=T)
+  }
+}
+
+write.table(tables_all, paste0("tmp_tables/libraries_normalized_fitness_all.csv"))
+```
+
+# plot normalized libraries
+```{r}
+all_normalized<-data.table(read.table(paste0("tmp_tables/libraries_normalized_fitness_all.csv")))
+```
+
+```{r fig.width=5, fig.height=7, warning=F}
+library(ggridges)
+
+#change library names from codes to actual names:
+all_normalized$library<-lib_code_to_name(all_normalized$library, libraries_names, libraries_names_plots)
+
+p<-ggplot(all_normalized)+
+      geom_density_ridges(aes(x=fitness_norm, y=library, fill=category),quantile_lines = TRUE,quantiles = 2, linewidth=1, alpha=0.4)+
+      theme_classic(base_size=16)+
+      xlim(c(-3,1))+
+      #ggtitle("All libraries normalized")+
+  theme(axis.title.y = element_blank(),
+        legend.position = "top",
+        legend.title = element_blank())+
+  xlab("fitness normalized")+
+      scale_fill_manual(values=c("blue","red", "green3"))#+theme(legend.position = "none")
+p
+
+p2<-ggplot(all_normalized[all_normalized$library %in% c("ERBIN_PDZ1 abundance", "ERBIN_PDZ1 binding CRIPT"),])+
+      geom_density_ridges(aes(x=fitness_norm, y=factor(library, levels=c("ERBIN_PDZ1 abundance", "ERBIN_PDZ1 binding CRIPT"), labels=c("ERBIN PDZ1\nabundance", "ERBIN PDZ1\nbinding CRIPT")), fill=category),quantile_lines = TRUE,quantiles = 2, linewidth=1, alpha=0.4)+
+      theme_classic(base_size=16)+
+      xlim(c(-3,1))+
+      #ggtitle("All libraries normalized")+
+  theme(axis.title.y = element_blank(),
+        axis.text.y = element_text(size=10),
+        axis.text.x = element_text(size=10),
+        axis.title.x = element_text(size=13),
+        legend.position = "top",
+        legend.title = element_blank(),
+        legend.key.size = unit(0.5, 'cm'),
+        legend.text = element_text(size=10),
+        legend.justification = "right")+
+  xlab("fitness normalized")+
+      scale_fill_manual(values=c("blue","red", "green3"))+#+theme(legend.position = "none")
+  guides(fill=guide_legend(nrow=1,byrow=TRUE))
+p2
+ggsave(paste0("Figs/Fig1/Fig1I_distributions_examples.png"), width=3.2, height=3.7 )
+
+
+
+```
+
+
+
+# libraries that do not have singles in one block
+the main problem here is that some blocks do not have singles because the background didn't codify for the wt. 
+I create a table with the libraries that have a problem and the new background that will substitute the singles.
+
+```{r}
+#check which are the libraries that do not have singles
+lib_changed<-c()
+block_changed<-c()
+single_positions<-c()
+new_background_wt<-c()
+fitness_<-c()
+fitness_norm_<-c()
+for(lib in libraries_names){
+  print(lib)
+  norm_fitness_dt<-as.data.table(read.table(paste0("tmp_tables/normalize_fitness/libraries_normalized_fitness_", lib, ".csv")))[Nham_aa==1]
+  expected<-nchar(norm_fitness_dt$aa_seq[1])*19
+  if(nrow(norm_fitness_dt)<expected/2){
+    print("changing lib")
+    lib_changed<-c(lib_changed, lib)
+    for(b in 1:2){
+      if(nrow(norm_fitness_dt[block==b])<30){
+        print(paste0("changing block", b))
+        block_changed<-c(block_changed,b)
+        norm_fitness_dt_<-norm_fitness_dt[block==b]
+        norm_fitness_dt_[,Pos:=as.numeric(gsub(".*?([0-9]+).*", "\\1", mut_id))]
+        single_positions<-c(single_positions,nrow(norm_fitness_dt_))
+        mildest_backgr<-norm_fitness_dt_[abs(fitness_norm)==min(abs(norm_fitness_dt_$fitness_norm))]
+        new_background_wt<-c(new_background_wt, mildest_backgr$mut_id)
+        fitness_<-c(fitness_, mildest_backgr$fitness)
+        fitness_norm_<-c(fitness_norm_, mildest_backgr$fitness_norm)
+      }
+    }
+  }
+}
+
+fitness_tables_modifications<-data.table("library"=lib_changed, "block"=block_changed, "num_singles"=single_positions,"new_wt"=new_background_wt, "fitness"=fitness_, "fitness_norm"=fitness_norm_)
+print(fitness_tables_modifications)
+write.csv(fitness_tables_modifications, paste0("tmp_tables/fitness_tables_modifications.csv"))
+
+```
+
+
+# choosing a new WT
+For the libraries that do not have singles in one of the blocks, I will take as new wt the mildest background. Closest to 0.
+```{r}
+all_normalized<-data.table(read.table(paste0("tmp_tables/libraries_normalized_fitness_all.csv")))
+```
+
+```{r}
+library(tidyr)
+modifications_libraries<-as.data.table(read.table(paste0("tmp_tables/fitness_tables_modifications.csv"), sep=",", header=T))
+all_fitness_modified<-data.table()
+
+for(lib in libraries_names){
+  if(lib %in% modifications_libraries$library){
+    #initialize variables
+    new_wt<-modifications_libraries[library==lib]$new_wt
+    block_to_modify<-modifications_libraries[library==lib]$block
+    print(paste0("problem with library ", lib))
+    print(paste0("problem with block ", block_to_modify))
+    
+    #load data
+    unmodified_block<-as.data.table(all_normalized)[library==lib & !block==block_to_modify & Nham_aa<2]
+    block_to_modify_dt<-as.data.table(all_normalized)[library==lib & block==block_to_modify]
+    block_to_modify_dt[,Pos:=as.numeric(gsub(".*?([0-9]+).*", "\\1", mut_id))]
+    mildest_backgr<-new_wt
+    
+    # subset to the doubles with the mildest background
+    block_to_modify_dt$mut_id_original<-block_to_modify_dt$mut_id
+    block_to_modify_dt<-as.data.table(block_to_modify_dt[Nham_aa==2] %>% separate(mut_id_original, c("mut1", "mut2"), ","))
+    new_background_dt<-block_to_modify_dt[mut1==mildest_backgr | mut2==mildest_backgr]
+    new_background_wt<-as.data.table(all_normalized)[library==lib & block==block_to_modify & extract_numeric(mut_id)==extract_numeric(mildest_backgr)] 
+    new_background_wt[mut_id==mildest_backgr, WT:=T]
+    new_background_wt[,modified_background:=T]
+    new_background_wt[,new_background:=mildest_backgr]
+  
+    #modify the table and make these the new singles
+    new_background_dt[,modified_background:=T]
+    new_background_dt[,new_background:=mildest_backgr]
+    new_background_dt[, old_mut_id := mut_id]
+    new_background_dt[, mut_id := ifelse(mut1 != mildest_backgr, mut1, mut2)]
+    
+    #now join the two sets
+    new_background_dt_complete<-rbind(new_background_dt, new_background_wt, fill=TRUE)
+    both_blocks_modified_background<-rbind(unmodified_block, new_background_dt_complete, fill=TRUE)
+    
+    #save the original vs modified table
+    write.csv(both_blocks_modified_background, paste0("tmp_tables/singles_fitness/singles_modified_background_", lib, ".csv"))
+    
+    all_fitness_modified<-rbind(all_fitness_modified, both_blocks_modified_background)
+    
+    write.csv(as.data.table(all_normalized)[library==lib & Nham_aa<2], paste0("tmp_tables/singles_fitness/singles_original_background_", lib, ".csv"))
+    
+    #print number of singles originally vs the modified one
+    print(paste0("original number of singles:", nrow(as.data.table(all_normalized)[library==lib & Nham_aa<2])))
+    print(paste0("modified number of singles:", nrow(both_blocks_modified_background)))
+    print(paste0("Expected number of singles:",nchar(both_blocks_modified_background$aa_seq[1])*20, "+overlap"))
+  }
+  else{
+    print(paste0("NO problem with library ", lib))
+    print(paste0("original number of singles:", nrow(as.data.table(all_normalized)[library==lib & Nham_aa<2])))
+    write.csv(as.data.table(all_normalized)[library==lib & Nham_aa<2], paste0("tmp_tables/singles_fitness/singles_original_background_", lib, ".csv"))
+  }
+}
+
+
+```
+
+
+# plot overlapping regions after modification
+```{r, eval=F}
+all_normalized<-data.table(read.table(paste0("tmp_tables/libraries_normalized_fitness_all.csv")))
+```
+
+```{r}
+modifications_libraries<-as.data.table(read.table(paste0("tmp_tables/fitness_tables_modifications.csv"), sep=",", header=T))
+
+modified_overlapping_plots<-list()
+all_fitness_modified<-data.table()
+c=1
+
+for(lib in libraries_names){
+  col="black"
+  if(is.na(str_extract(lib, "psd95_pdz3"))){
+  
+  if (lib %in% modifications_libraries$library){modified_table<-as.data.table(read.table(paste0("tmp_tables/singles_fitness/singles_modified_background_", lib, ".csv"), sep=",", header=T))
+  col="tomato"}
+  else{modified_table<-as.data.table(all_normalized)[library==lib]}
+    
+  modified_table[,mutation:=substr(mut_id, nchar(mut_id), nchar(mut_id))]
+  ggplot(modified_table)+
+    geom_tile(aes(x=Pos, y=mutation, fill=fitness_norm))
+  
+  #join all final used data (all modified)
+  all_fitness_modified<-rbind(all_fitness_modified, modified_table, fill=TRUE)
+  
+  # identify overlapping mutations
+  overlapping_mutations<-as.list(modified_table[duplicated(modified_table$mut_id) & modified_table$mut_id!="", "mut_id"])$mut_id
+  
+  # extract overlapping regions
+  overlapping_blocks_tmp<-modified_table[modified_table$mut_id %in% overlapping_mutations ,c("aa_seq", "Nham_aa", "block", "mut_id", "fitness_norm", "sigma")]
+  overlapping_b1<-overlapping_blocks_tmp[block==1,]
+  overlapping_b2<-overlapping_blocks_tmp[block==2,]
+  overlapping_blocks<-merge(overlapping_b1, overlapping_b2, by=c("mut_id"), suffixes=c(".b1", ".b2"))
+  
+  # Generate correlation plot
+  p_corr_overlap<-ggplot(overlapping_blocks,aes(x=fitness_norm.b1, y=fitness_norm.b2))+
+        theme_classic()+
+        xlab("fitness block1") + 
+        ylab("fitness block2") + 
+        geom_hline(yintercept=0, color="grey")+
+        geom_vline(xintercept=0, color="grey") +
+        geom_abline(color="grey")+
+        geom_point(alpha=0.5, size=1, color=col)+ 
+        coord_fixed(ratio = 1, xlim = c(-1.7, 0.5), ylim = c(-1.7, 0.5))+
+        stat_poly_eq(size=3) +
+        ggtitle(sub(" ", "\n", libraries_names[which(libraries==lib)]))+ 
+        theme(plot.title = element_text(size=6), axis.text.x = element_text(angle=90, size=7,vjust = 0.5, hjust=1), axis.text.y = element_text(size=7), axis.title.x = element_text(size=7), axis.title.y = element_text(size=7))
+
+  modified_overlapping_plots[[c]]<-p_corr_overlap
+  c=c+1
+  all_fitness_modified<-rbind(all_fitness_modified, modified_table, fill=TRUE)
+  
+  }
+  else{modified_table<-as.data.table(all_normalized)[library==lib]
+   all_fitness_modified<-rbind(all_fitness_modified, modified_table, fill=TRUE)}
+}
+```
+
+```{r}
+all_fitness_modified[is.na(modified_background), modified_background:=F]
+
+
+#for non modified backgrounds, it has to be comparison of singles
+all_fitness_modified_singles_non_modified<-all_fitness_modified[modified_background==F & Nham_aa==1]
+all_fitness_modified_singles_non_modified[, Pos:=extract_numeric(mut_id)]
+all_fitness_modified_singles_non_modified[, mutation:=substr(mut_id, nchar(mut_id), nchar(mut_id))]
+
+#for modified backgrounds, it has to be comparison of NEW singles
+all_fitness_modified_singles_modified<-all_fitness_modified[modified_background==T & Nham_aa>=1]
+all_fitness_modified_singles_modified[, Pos:=extract_numeric(mut_id)]
+all_fitness_modified_singles_modified[, mutation:=substr(mut_id, nchar(mut_id), nchar(mut_id))]
+
+# now I join both cases
+all_fitness_modified_singles<-rbind(all_fitness_modified_singles_modified, all_fitness_modified_singles_non_modified)
+
+all_fitness_modified_wide<-reshape(all_fitness_modified_singles[,c("library", "block", "fitness_norm", "std_norm", "mutation", "Pos")], idvar = c("library", "mutation", "Pos"), timevar = "block", direction = "wide")
+# now I add the info for the modified backgrounds
+all_fitness_modified_wide[, modified_background:=library %in% modifications_libraries$library]
+
+
+all_fitness_modified_wide$library_name<-gsub("_", "-", gsub(" binding ", "\n", (unlist(lapply(all_fitness_modified_wide$library, lib_code_to_name, libraries_names, libraries_names_plots)))))
+all_fitness_modified_wide$library_name<-gsub(" abundance", "\nabundance", all_fitness_modified_wide$library_name)
+
+ggplot(all_fitness_modified_wide[!library %in% c("psd95_pdz3", "psd95_pdz3_cript")], aes(x=fitness_norm.1, y=fitness_norm.2, color=modified_background))+
+  scale_color_manual(values=c("black", "red"))+
+  stat_cor(aes(label = paste(..rr.label.., sep = "~`,`~")), label.y = 1, label.x=-1.9, color="black", size=4)+
+  geom_point(alpha=0.5)+
+  geom_errorbar(aes(ymin = fitness_norm.2 - std_norm.2, ymax = fitness_norm.2 + std_norm.2), width = 0.1, alpha = 0.3) +
+  geom_errorbar(aes(xmin = fitness_norm.1 - std_norm.1, xmax = fitness_norm.1 + std_norm.1), width = 0.1, alpha = 0.3) +
+  geom_abline()+
+  facet_wrap(~library_name, nrow=5)+
+  theme_classic()+
+  xlab("normalized fitness block1")+
+  ylab("normalized fitness block2")+
+  theme(legend.position="none")+
+  ylim(c(-2.2, 1.3))+
+  theme(legend.position="none",
+        strip.text.x = element_text(size = 8, face = "bold"),
+        strip.background = element_rect(color="grey", fill="white", size=1.5, linetype="solid"
+     ))
+
+ggsave(paste0("Figs/Fig1/FigS1B_normalized_overlapping.png"), width=3, height=8)
+
+```
+
+
+# save a final table with all the normalizations for supplementary material
+load the working table
+```{r}
+all_normalized<-data.table(read.table(paste0("tmp_tables/libraries_normalized_fitness_all.csv")))
+```
+
+clean and save the table
+```{r}
+all_normalized<-as.data.table(all_normalized)[, -c("V1", "STOP_readthrough", "indel", "Nham_nt", "nt_seq")]
+setnames(all_normalized, "fitness1_uncorr", "fitness_r1")
+setnames(all_normalized, "fitness2_uncorr", "fitness_r2")
+setnames(all_normalized, "fitness3_uncorr", "fitness_r3")
+setnames(all_normalized, "fitness_norm_blocks", "fitness_norm_between_blocks")
+all_normalized$library<-lib_code_to_name(all_normalized$library, libraries, libraries_names)
+
+all_normalized<-all_normalized %>%
+  relocate(block)
+
+all_normalized<-all_normalized %>%
+  relocate(library)
+fwrite(all_normalized, "supplementary_tables/Supplementary_table4.txt")
+```
+
+
+

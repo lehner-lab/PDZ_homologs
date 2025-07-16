@@ -1,0 +1,370 @@
+---
+title: "Assesment of mochi quality"
+author: "Aina Martí-Aranda"
+date: "June 2025"
+output:
+  html_document:
+    toc: true
+    theme: cerulean
+    toc_float: true
+    toc_collapsed: true
+---
+
+```{r setup}
+base_dir<-"/Users/aa33/Library/CloudStorage/OneDrive-WellcomeSangerInstitute/001-Projects/03-PDZ_Homologs/02-DryLab/001-data_analysis/data_analysis_github/"
+knitr::opts_knit$set(root.dir = base_dir)
+setwd(base_dir)
+
+# load some variables
+load('source_variables.RData')
+```
+
+
+# libraries used for the analysis
+```{r message=FALSE, warning=FALSE}
+library(car)
+library(systemfonts)
+library(plyr)
+library(ggiraph)
+library(ggiraphExtra)
+library(rstatix)
+library(data.table)
+library(dplyr)
+library(seqinr)
+library(stringr)
+library(ggplot2)
+library(Matrix)
+library(viridis)
+library(ggpubr)
+library(readxl)
+library(stringi)
+library(GGally)
+library("readxl")
+library(modelr)
+library(cowplot)
+library(ggpointdensity)
+library(plot3D)
+```
+
+
+# create simpler tables Predicted vs Observed
+```{r}
+library(data.table)
+
+# Initialize variables
+counter <- 1
+counter_abu <- 1
+predicted_phenotypes_all<-data.table()
+before_second_underscore <- sub("^([^_]+_[^_]+).*", "\\1", libraries_binding_names)
+
+
+# Loop through the PDZs
+for (pdz in tolower(pdz_names)) {
+  print(pdz)
+  this_binding_libraries<-libraries_binding_names[which(before_second_underscore==pdz)]
+  num_binding_libraries<-length(this_binding_libraries)
+  
+  #set mochi run name
+  mochi_run<-pdz
+  
+  #load mochi run weights
+  library_path <- paste0(base_dir, "data/MoCHI/", mochi_run)
+  print(library_path)
+  predicted_phenotypes <- fread(paste0(library_path, "/mochi_project/task_1/predictions/predicted_phenotypes_all.txt"), sep = "\t")
+  
+  # define assay rows
+  abundance_columns <- grep("Abundance", colnames(predicted_phenotypes), value = TRUE)
+  binding_columns <- grep("Binding", colnames(predicted_phenotypes), value = TRUE)
+  predicted_phenotypes[,assay:="abundance"]
+  predicted_phenotypes[rowSums(predicted_phenotypes[,..binding_columns], na.rm=T)>0,assay:="binding"]
+  predicted_phenotypes[is.na(WT),WT:=F]
+  
+  # process blocks 
+  if(pdz=="psd95_pdz3"){predicted_phenotypes[, block := as.factor(1)]}
+  else{
+    predicted_phenotypes[, block := 0]
+    b1_columns <- grep("_b1", colnames(predicted_phenotypes), value = TRUE)
+    b2_columns <- grep("_b2", colnames(predicted_phenotypes), value = TRUE)
+    predicted_phenotypes[rowSums(predicted_phenotypes[,..b1_columns], na.rm=T)>0, block := 1]
+    predicted_phenotypes[rowSums(predicted_phenotypes[,..b2_columns], na.rm=T)>0, block := 2]
+  }
+  
+  
+  # library names column
+  if(length(this_binding_libraries)==1){
+    predicted_phenotypes[, library := paste0(pdz)] #there shouldn't be abundance rows (I will separate this later)
+    predicted_phenotypes[assay=="binding", library := this_binding_libraries]
+  }
+  else{
+    predicted_phenotypes[, library := paste0(pdz)]
+    binding1_columns <- grep("Binding1", colnames(predicted_phenotypes), value = TRUE)
+    binding2_columns <- grep("Binding2", colnames(predicted_phenotypes), value = TRUE)
+    predicted_phenotypes[rowSums(predicted_phenotypes[,..binding1_columns], na.rm=T)>0, library := this_binding_libraries[1]]
+    predicted_phenotypes[rowSums(predicted_phenotypes[,..binding2_columns], na.rm=T)>0, library := this_binding_libraries[2]]
+  }
+  
+  
+  # Extract predictions column
+  predicted_phenotypes[, predicted_fitness := apply(.SD, 1, extract_prediction), .SDcols = colnames(predicted_phenotypes)]
+  
+  # Extract additive traits column
+  predicted_phenotypes[,additive_trait_column_f := paste0("fold_", Fold, "_additive_trait0")]
+  predicted_phenotypes[,additive_trait_column_b := paste0("fold_", Fold, "_additive_trait1")]
+  predicted_phenotypes[, additive_trait_f := apply(.SD, 1, extract_additive_trait, "folding")]
+  predicted_phenotypes[, additive_trait_b := apply(.SD, 1, extract_additive_trait, "binding")]
+  
+  # Rename columns for consistency
+  setnames(predicted_phenotypes, "fitness", "observed_fitness")
+  
+  # separeate folding and concatenate
+  predicted_phenotypes[,additive_trait:=additive_trait_f]
+  predicted_phenotypes[assay=="binding",additive_trait:=additive_trait_b]
+  
+  # Save results
+  predicted_phenotypes_simple<-predicted_phenotypes[,c("nt_seq", "aa_seq", "Nham_nt", "Nham_aa","Nmut_codons", "WT","STOP", "growthrate", "growthrate_sigma","observed_fitness","sigma", "category", "phenotype", "Fold","mean", "std", "ci95", "assay", "block", "library", "predicted_fitness", "additive_trait_f", "additive_trait_b", "additive_trait")]
+  #fwrite(predicted_phenotypes_simple, paste0(base_dir, "/tmp_tables/mochi/pred_obs_mochi_", pdz, ".csv"), sep = "\t")
+  counter <- counter + 1
+  predicted_phenotypes_all<-rbind(predicted_phenotypes_all, predicted_phenotypes_simple)
+}
+
+fwrite(predicted_phenotypes_all, paste0(base_dir, "/tmp_tables/pred_obs_mochi_all.csv"), sep = "\t")
+
+```
+
+
+# create simpler mean_kcal.mol tables
+```{r tables}
+weights_all_concatenated<-data.table()
+
+for (pdz in tolower(pdz_names)) {
+  print(pdz)
+  this_binding_libraries<-libraries_binding_names[which(before_second_underscore==pdz)]
+  num_binding_libraries<-length(this_binding_libraries)
+  
+  #set mochi run name
+  mochi_run<-pdz
+  
+  #load mochi run weights
+  library_path <- paste0(base_dir, "data/MoCHI/", mochi_run)
+  
+  #prepare weights table
+  weights_all<-data.table()
+  
+  #load folding weights
+  weights_folding <- as.data.table(read.table(paste0(library_path, "/mochi_project/task_1/weights/weights_Folding.txt"), header=TRUE, sep = "\t"))
+  weights_folding[,library:=paste0(pdz,"_abundance")]
+  weights_folding[,assay:="folding"]
+  weights_all<-rbind(weights_all, weights_folding)
+  
+  if(num_binding_libraries==1){
+    weights_Binding <- as.data.table(read.table(paste0(library_path, "/mochi_project/task_1/weights/weights_Binding.txt"), header=TRUE, sep = "\t"))
+    weights_Binding[,library:=this_binding_libraries]
+    weights_Binding[,assay:="binding"]
+    weights_all<-rbind(weights_all, weights_Binding)
+    }
+  else{
+    for(lib_num in 1:num_binding_libraries){
+      weights_Binding <- as.data.table(read.table(paste0(library_path, "/mochi_project/task_1/weights/weights_Binding",lib_num,".txt"), header=TRUE, sep = "\t"))
+      weights_Binding[,library:=this_binding_libraries[lib_num]]
+      weights_Binding[,assay:="binding"]
+    weights_all<-rbind(weights_all, weights_Binding)
+    }
+  }
+  
+  #simplify
+  weights_all<-weights_all[,c("id", "Pos", "trait_name", "mean_kcal.mol", "std_kcal.mol", "ci95_kcal.mol", "library", "assay")]
+  
+  
+  # concatenate tables
+  weights_all_concatenated<-rbind(weights_all_concatenated, weights_all)
+}
+
+#save the complete simplified table 
+write.table(weights_all_concatenated, paste0(base_dir, "tmp_tables/weights_mochi_all.csv"), sep="\t")
+```
+
+
+# Making report plots
+```{r}
+predicted_phenotypes_all<-fread(paste0(base_dir, "tmp_tables/pred_obs_mochi_all.csv"), sep = "\t")
+weights_all_concatenated<-fread(paste0(base_dir, "tmp_tables/weights_mochi_all.csv"), sep="\t")
+```
+
+
+```{r}
+predicted_phenotypes_all$lib_name<-lib_code_to_name(predicted_phenotypes_all$library, libraries_names, libraries_names_plots)
+predicted_phenotypes_all$lib_name<-sub(" abundance","\nabundance",sub("_", "-", gsub(" binding ", " | ", predicted_phenotypes_all$lib_name)))
+
+p<-ggplot(predicted_phenotypes_all,(aes(y=observed_fitness, x=predicted_fitness, color=factor(block))))+
+    geom_point(alpha=0.05) + 
+    stat_cor(aes(label = ..r.label..), cor.coef.name ="R")+
+    #stat_regline_equation( aes(label = ..rr.label..), size = 6, fontface="bold")+ 
+    ylim(c(-1.6, 0.6))+ 
+    xlim(c(-1.6, 0.6))+
+    xlab("Predicted fitness")+
+    ylab("Observed fitness")+
+    theme_classic(base_size = 13)+
+    geom_smooth(method = "lm", se = FALSE, color="black", linetype="dashed")+
+    #ggtitle(gsub(" binding", "\nbinding",  gsub(" with", "", libraries_names[counter]))) +
+    facet_wrap(~factor(lib_name, levels=sub(" abundance","\nabundance",sub("_", "-", gsub(" binding ", " | ", libraries_names_plots)))), nrow=2)+
+    #coord_fixed(ratio = 1) + 
+    guides(color=guide_legend(title="block"))+
+  theme(legend.position = "none") +
+      scale_color_manual(values = c("orange", "slateblue1"))
+
+ggsave(paste0("Figs/Fig2/FigS2Apred_vs_obs_mochi_all.png"), width=13, height=4)
+
+ p<-ggplot(predicted_phenotypes_all[assay=="abundance",],(aes(y=observed_fitness, x=additive_trait)))+
+    geom_pointdensity() + 
+    scale_colour_gradient2(low = "grey96", mid="black", high = "black", midpoint = 5000 )+
+    theme_classic(base_size = 13) +
+    geom_line(aes(x=additive_trait, y=predicted_fitness), color="firebrick3", linewidth=1)+
+    #ggtitle(libraries_names[which(libraries==library_)]) +
+  theme(plot.title = element_text(size=15))+
+  facet_wrap(~factor(lib_name, levels=sub(" abundance","\nabundance",sub("_", "-", gsub(" binding ", " | ", libraries_names_plots))), labels=sub(" abundance","",sub("_", "-", gsub(" binding ", " | ", libraries_names_plots))))+
+               factor(block, levels=c(1,2), labels=c("block1", "block2")), nrow=1)+
+  xlab("Additive trait")+ylab("Observed fitness")
+
+ggsave(paste0("Figs/Fig2/FigS2Bmochi_folding_model_all.png"), width=13, height=2.5)
+
+```
+
+## Examples of the report plots for the main figure
+```{r}
+p<-ggplot(predicted_phenotypes_all[library %in% c("erbin_pdz1", "erbin_pdz1_cript")],(aes(y=observed_fitness, x=predicted_fitness, color=factor(block))))+
+    geom_point(alpha=0.05) + 
+    stat_cor(aes(label = ..r.label..), cor.coef.name ="R")+
+    #stat_regline_equation( aes(label = ..rr.label..), size = 6, fontface="bold")+ 
+    ylim(c(-1.6, 0.6))+ 
+    xlim(c(-1.6, 0.6))+
+    xlab("Predicted fitness")+
+    ylab("Observed fitness")+
+    theme_classic(base_size = 13)+
+    geom_smooth(method = "lm", se = FALSE, color="black", linetype="dashed")+
+    #ggtitle(gsub(" binding", "\nbinding",  gsub(" with", "", libraries_names[counter]))) +
+    facet_wrap(~factor(lib_name, levels=sub("_", "-", sub(" binding ", " | ",sub(" abundance", "\nabundance",libraries_names_plots)))), nrow=1)+
+    #coord_fixed(ratio = 1) + 
+    guides(color=guide_legend(title="block"))+
+  theme(legend.position = "none") +
+      scale_color_manual(values = c("orange", "slateblue1"))
+
+ggsave(paste0("Figs/Fig1/Fig1Mobs_vs_pred_erbin.png"), width=4, height=2.5)
+
+
+p<-ggplot(predicted_phenotypes_all[library=="erbin_pdz1",],(aes(y=observed_fitness, x=additive_trait)))+
+    geom_pointdensity() + 
+    scale_colour_gradient2(low = "grey96", mid="black", high = "black", midpoint = 5000 )+
+    theme_classic(base_size = 13) +
+    geom_line(aes(x=additive_trait, y=predicted_fitness), color="firebrick3", linewidth=1)+
+    #ggtitle(libraries_names[which(libraries==library_)]) +
+  theme(plot.title = element_text(size=15))+
+  facet_wrap(~factor(lib_name, levels="ERBIN-PDZ1\nabundance", labels="ERBIN-PDZ1")+
+               factor(block, levels=c(1,2), labels=c("block1", "block2")), nrow=1)+
+  xlab("Additive trait")+ylab("Observed fitness")
+
+ggsave(paste0("Figs/Fig1/Fig1Lfolding_add_trait_erbin.png"), width=4, height=2.5)
+
+```
+
+
+# correlations summary tables and plots
+```{r}
+correlations_all_dt<-data.table()
+
+for(lib in libraries_names){
+  predicted_phenotypes_tmp<-predicted_phenotypes_all[library==lib,]
+  
+  correlation_dt<-cor(predicted_phenotypes_tmp[block==1, c("observed_fitness", "predicted_fitness")],use="complete.obs")
+  
+  correlation_dt<-data.table(library=lib,corr=correlation_dt[1,2], block=1)
+  correlations_all_dt<-rbind(correlations_all_dt, correlation_dt)
+  
+  
+  if(is.na(str_extract(lib,"psd95_pdz3"))){
+    correlation_dt<-cor(predicted_phenotypes_tmp[block==2, c("observed_fitness", "predicted_fitness")],use="complete.obs")
+    correlation_dt<-data.table(library=lib,corr=correlation_dt[1,2], block=2)
+  correlations_all_dt<-rbind(correlations_all_dt, correlation_dt)
+    }
+}
+summary(correlations_all_dt$corr)
+
+```
+
+
+```{r}
+ggplot(correlations_all_dt)+
+  geom_histogram(bins=40,aes(x=corr, fill=factor(block, levels=c(1,2), labels=c("block1", "block2")),color=factor(block, levels=c(1,2), labels=c("block1", "block2"))), alpha=0.5)+
+  xlim(c(0,1))+
+  scale_fill_manual("",values=c("orange", "slateblue1"))+
+  scale_color_manual("",values=c("orange", "slateblue1"))+
+  theme_classic(base_size=9)+
+  theme(legend.position="top")+
+  xlab("correlations\nPredicted vs Observed")+
+  theme(axis.title.x=element_text(size=8),
+        axis.title.y=element_text(size=8),
+        legend.key.height= unit(0.2, 'cm'),
+        legend.key.width= unit(0.2, 'cm'), legend.position="none")
+ggsave(paste0("Figs/Fig1/Fig1Ndistribution_correlations_ddg_obs_pred.png"), width=1.7, height=1.7)
+```
+
+
+# 3D plots ddGb ddGf fitnessB
+```{r}
+weights_all<-fread(paste0(base_dir, "tmp_tables/weights_mochi_all.csv"), sep="\t")
+```
+
+##block1
+```{r}
+b=1
+i=1
+for (lib in libraries_binding_names){
+  print(lib)
+  RT = 0.001987*(273+24)
+  pdz<-before_second_underscore[i]
+  i=i+1
+  dt_additive_traits<-predicted_phenotypes_all[library==lib & block==b]
+  wt_aa_seq<-predicted_phenotypes_all[library==lib & block==b & WT==T]$aa_seq
+  dt_additive_traits$mut_id<-unlist(lapply(dt_additive_traits$aa_seq, find_mutated_list, wt_aa_seq))
+  graphics.off()
+  png(filename = paste0("Figs/Fig2/3d_mochi_plots/", lib, "_", b,".png"), width = 4, height = 4, units = "in", res = 300, bg = "transparent")
+  
+  pdz<-sub("^([^_]+_[^_]+).*", "\\1", lib)
+  this_binding_libraries<-libraries_binding_names[which(before_second_underscore==pdz)]
+  num_binding_libraries<-length(this_binding_libraries)
+  this_lib_index<-which(this_binding_libraries==lib)
+  
+  doubledeepms__pdzhomologs__plot_additive_trait_binding(lib,b, dt_additive_traits, base_dir, num_binding_libraries, this_lib_index)
+  dev.off()
+}
+```
+
+
+##block2
+```{r}
+b=2
+i=1
+for (lib in libraries_binding_names){
+  pdz<-before_second_underscore[i]
+  i=i+1
+  
+  print(lib)
+  if(lib!="psd95_pdz3_cript"){
+    RT = 0.001987*(273+24)
+    dt_additive_traits<-predicted_phenotypes_all[library==lib & block==b]
+    wt_aa_seq<-predicted_phenotypes_all[library==lib & block==b & WT==T]$aa_seq
+    dt_additive_traits$mut_id<-unlist(lapply(dt_additive_traits$aa_seq, find_mutated_list, wt_aa_seq))
+    graphics.off()
+  png(filename = paste0("Figs/Fig2/3d_mochi_plots/", lib, "_", b,".png"), width = 4, height = 4, units = "in", res = 300, bg = "transparent")
+  
+  pdz<-sub("^([^_]+_[^_]+).*", "\\1", lib)
+  this_binding_libraries<-libraries_binding_names[which(before_second_underscore==pdz)]
+  num_binding_libraries<-length(this_binding_libraries)
+  this_lib_index<-which(this_binding_libraries==lib)
+  
+  doubledeepms__pdzhomologs__plot_additive_trait_binding(lib, b,dt_additive_traits,base_dir, num_binding_libraries, this_lib_index)
+    dev.off()
+  }
+}
+```
+
+

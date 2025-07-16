@@ -1,0 +1,302 @@
+---
+title: "Overall quality report dimsum"
+author: "Aina Martí-Aranda"
+date: "June 2025"
+output:
+  html_document:
+    toc: true
+    theme: cerulean
+    toc_float: true
+    toc_collapsed: true
+---
+
+Figures for Dimsum Quality reports: Fig1, FigS1
+
+# initializing
+```{r setup}
+base_dir<-"/Users/aa33/Library/CloudStorage/OneDrive-WellcomeSangerInstitute/001-Projects/03-PDZ_Homologs/02-DryLab/001-data_analysis/data_analysis_github/"
+knitr::opts_knit$set(root.dir = base_dir)
+setwd(base_dir)
+
+# load some variables
+load('source_variables.RData')
+```
+
+
+## libraries used for the analysis
+```{r libraries, warning=F, results='hide', message=FALSE}
+library(car)
+library(systemfonts)
+library(plyr)
+library(ggiraph)
+library(ggiraphExtra)
+library(rstatix)
+library(data.table)
+library(dplyr)
+library(seqinr)
+library(stringr)
+library(ggplot2)
+library(Matrix)
+library(viridis)
+library(ggpubr)
+library(readxl)
+library(stringi)
+library(GGally)
+library("readxl")
+library(modelr)
+library(cowplot)
+library(ggplotify)
+library(grid)
+library(ggpointdensity)
+library(cowplot)
+```
+
+
+# fitness correlations plots and fitness distributions
+```{r, warning=FALSE, message=FALSE}
+setwd(base_dir)
+# Initialize variables
+correlations <- list()
+fitness_distributions <- list()
+plots_joined_list <- list()
+counter <- 1
+plotcounter <- 1
+correlations_pearson <- data.table()
+all_variants_all<-data.table()
+
+
+# Iterate over libraries
+for (library in libraries_names) {
+  print(library)
+  
+  # === Block 1: Load and Process Data ===
+  print("Processing Block 1")
+  if(!is.na(str_extract(library, "psd95_pdz3"))){
+    block1_data_path<-list.files(path = paste0("data/DiMSum/block1/", library), pattern = "_corrected_counts_fitness_replicates\\.txt$", full.names = TRUE)
+    all_variants<-data.table(fread(block1_data_path))
+  }
+  else{block1_data_path<-list.files(path = paste0("data/DiMSum/block1/", library), pattern = "_corrected_counts_fitness_replicates\\.RData$", full.names = TRUE)
+  load(block1_data_path)}
+  
+  
+  # Subset replicates
+  replicate_cols <- if (!is.na(str_extract(library, "psd95_pdz3"))) c(17, 19, 21) else c(17, 18, 19)
+  colnames(all_variants)[replicate_cols] <- c("R1", "R2", "R3")
+  table_subset <- all_variants[, replicate_cols, with = FALSE]
+  
+  
+  # Compute correlations
+  correlation_matrix <- cor(table_subset, method = "spearman", use = "complete.obs")
+  correlation_dt <- data.table(
+    library = library,
+    lib_name = libraries_names[counter],
+    cor1 = correlation_matrix[1, 2],
+    cor2 = correlation_matrix[1, 3],
+    cor3 = correlation_matrix[2, 3],
+    block = 1
+  )
+  correlations_pearson <- rbind(correlations_pearson, correlation_dt)
+  
+  # Plot replicate correlations
+  correlation_plot <- gg_replicate_fitness_correlations(table_subset) +
+    ggtitle(paste0(libraries_names[counter], "\nBlock 1"))
+  correlations[[plotcounter]] <- grid.grabExpr(print(correlation_plot))
+  
+  # ADD synonymous variants
+  if (is.na(str_extract(library, "psd95_pdz3"))) {
+    syn_variants_path <- paste0("data/DiMSum/block1/", library, "/fitness_synonymous.txt")
+    syn_variants <- fread(syn_variants_path, na.strings = "NA")[, WT := ifelse(is.na(WT), FALSE, WT)]
+    colnames(syn_variants)[replicate_cols] <- c("R1", "R2", "R3")
+    all_variants <- rbind(all_variants, syn_variants[WT == FALSE])
+  }
+  
+  # Annotate variants by category
+  all_variants[, category := "missense"]
+  all_variants[WT==T, category := "WT"]
+  all_variants[is.na(WT), WT:=F]
+  all_variants[Nham_aa == 0 & WT == FALSE, category := "synonymous"]
+  all_variants[STOP == "TRUE", category := "stop"]
+  
+  # Save processed variants
+  #write.csv(all_variants, paste0(results_dir, "fitness_tables_per_block/", library, "_b1_all_variants.csv"))
+  all_variants[, library:=library]
+  all_variants[, block:=1]
+  all_variants<-all_variants[, c("aa_seq", "Nham_aa", "WT", "STOP", "mean_count", "R1", "R2", "R3", "fitness", "sigma", "category", "library", "block")]
+  all_variants_all<-rbind(all_variants_all, all_variants)
+  
+  # Plot fitness distributions
+  fitness_plot <- gg_fitness_distributions(all_variants, libraries_names_plots, counter) +
+    theme(legend.position = "none") +
+    ggtitle(paste0(libraries_names_plots[counter], " Block 1"))
+  fitness_distributions[[plotcounter]] <- fitness_plot
+  
+  # join plots
+  title <- ggdraw() + geom_rect(aes(xmin = 0, xmax = 1, ymin = 0, ymax = 1), 
+            color = "black", fill = "grey90", size = 1)+draw_label(paste0(libraries_names_plots[counter], " Block 1"), fontface ="bold")
+  p1<-correlation_plot+theme(plot.title = element_blank())
+  p2<-fitness_plot+theme(plot.title = element_blank())
+  plots_row<-plot_grid( ggmatrix_gtable(p1),p2, ncol=2)
+  plots_joined<-plot_grid(title,plots_row, ncol=1, rel_heights=c(0.15, 1))
+  plots_joined_list[[plotcounter]] <- plots_joined
+  plotcounter <- plotcounter + 1
+  
+  
+  
+  # === Block 2: Load and Process Additional Data ===
+  print("Processing Block 2")
+  if (is.na(str_extract(library, "psd95_pdz3"))) {
+    
+    block2_data_path<-list.files(path = paste0("data/DiMSum/block2/", library), pattern = "_corrected_counts_fitness_replicates\\.RData$", full.names = TRUE)
+    load(block2_data_path)
+  
+    
+    replicate_cols <- if (!is.na(str_extract(library, "psd95_pdz2"))) c(17, 18, 19) else c(17, 19, 21)
+    colnames(all_variants)[replicate_cols] <- c("R1", "R2", "R3")
+    table_subset <- all_variants[, replicate_cols, with = FALSE]
+    
+    # Compute correlations
+    correlation_matrix <- cor(table_subset, method = "pearson", use = "complete.obs")
+    correlation_dt <- data.table(
+      library = library,
+      lib_name = libraries_names[counter],
+      cor1 = correlation_matrix[1, 2],
+      cor2 = correlation_matrix[1, 3],
+      cor3 = correlation_matrix[2, 3],
+      block = 2
+    )
+    correlations_pearson <- rbind(correlations_pearson, correlation_dt)
+    
+    # Plot replicate correlations
+    correlation_plot <- gg_replicate_fitness_correlations(table_subset) +
+      ggtitle(paste0(libraries_names[counter], "\nBlock 2"))
+    correlations[[plotcounter]] <- grid.grabExpr(print(correlation_plot))
+    
+    # ADD synonymous variants
+    if (!is.na(str_extract(library, "psd95_pdz2"))) {
+      syn_variants_path <- paste0("data/DiMSum/block2/", library, "/fitness_synonymous.txt")
+      syn_variants <- fread(syn_variants_path, na.strings = "NA")[, WT := ifelse(is.na(WT), FALSE, WT)]
+      colnames(syn_variants)[replicate_cols] <- c("R1", "R2", "R3")
+      all_variants <- rbind(all_variants, syn_variants[WT == FALSE])
+    }
+    
+    # Annotate variants by category
+    all_variants[, category := "missense"]
+    all_variants[WT==T, category := "WT"]
+    all_variants[is.na(WT), WT:=F]
+    all_variants[Nham_aa == 0 & WT == FALSE, category := "synonymous"]
+    all_variants[STOP == "TRUE", category := "stop"]
+    
+    # Save processed variants
+    #write.csv(all_variants, paste0(results_dir, "fitness_tables_per_block/", library, "_b2_all_variants.csv"))
+    all_variants[, library:=library]
+    all_variants[, block:=2]
+    all_variants<-all_variants[, c("aa_seq", "Nham_aa", "WT", "STOP", "mean_count", "R1", "R2", "R3", "fitness", "sigma", "category", "library", "block")]
+    all_variants_all<-rbind(all_variants_all, all_variants)
+    
+    # Plot fitness distributions
+    fitness_plot <- gg_fitness_distributions(all_variants, libraries_names_plots, counter) +
+      theme(legend.position = "none") +
+      ggtitle(paste0(libraries_names_plots[counter], " Block 2"))
+    fitness_distributions[[plotcounter]] <- fitness_plot
+    
+    # join plots
+    title <- ggdraw() + geom_rect(aes(xmin = 0, xmax = 1, ymin = 0, ymax = 1), 
+            color = "black", fill = "grey90", size = 1)+draw_label(paste0(libraries_names_plots[counter], " Block 2"), fontface ="bold")
+    p1<-correlation_plot+theme(plot.title = element_blank())
+    p2<-fitness_plot+theme(plot.title = element_blank(), 
+                           axis.title.x=element_text(size=10),
+                          axis.title.y=element_text(size=10))
+    plots_row<-plot_grid( ggmatrix_gtable(p1),p2, ncol=2)
+    plots_joined<-plot_grid(title,plots_row, ncol=1, rel_heights=c(0.15, 1))
+    plots_joined_list[[plotcounter]] <- plots_joined
+    
+    plotcounter <- plotcounter + 1
+  }
+  
+  counter <- counter + 1
+}
+
+# Save correlations to a file
+write.table(correlations_pearson, paste0("tmp_tables/fitness_correlations_pearson.csv"))
+#write.table(all_variants, paste0("tmp_tables/fitness_all_variants_all.csv"))
+
+```
+
+
+
+
+
+
+# joined plots
+```{r correlations, fig.width=11, fig.height=20}
+plot_grid(plotlist=plots_joined_list, ncol=4)
+ggsave(paste0("Figs/Fig1/FigS1A_fitness_correlations_and_distributions.png"), width=17.5, height=13.5)
+```
+
+
+# save one example of correlation
+```{r}
+library="erbin_pdz1_cript"
+# === Block 2: Load and Process Additional Data ===
+print("Processing Block 2")
+block2_data_path<-list.files(path = paste0("data/DiMSum/block2/", library), pattern = "_corrected_counts_fitness_replicates\\.RData$", full.names = TRUE)
+load(block2_data_path)
+
+replicate_cols <- c(17, 19, 21)
+colnames(all_variants)[replicate_cols] <- c("R1", "R2", "R3")
+table_subset <- all_variants[, replicate_cols, with = FALSE]
+
+# Compute correlations
+correlation_matrix <- cor(table_subset, method = "pearson", use = "complete.obs")
+correlation_dt <- data.table(
+  library = library,
+  lib_name = libraries_names[counter],
+  cor1 = correlation_matrix[1, 2],
+  cor2 = correlation_matrix[1, 3],
+  cor3 = correlation_matrix[2, 3],
+  block = 2)
+
+# Plot replicate correlations
+correlation_plot <- gg_replicate_fitness_correlations(table_subset) +
+  ggtitle(paste0(libraries_names[counter], "\nBlock 2"))
+  
+correlation_plot+ggtitle("ERBIN PDZ1 binding CRIPT block2")+theme(title=element_text(face = "bold"))
+ggsave(paste0("Figs/Fig1/Fig1G_fitness_correlation_777_808_b2.png"), width=3.3, height=3.5)
+
+```
+
+
+
+
+# summary replicate correlations
+```{r}
+correlations_pearson_long<-melt(as.data.table(correlations_pearson), id.vars =c("library", "lib_name","block") )
+
+ggplot(correlations_pearson_long)+
+  geom_histogram(bins=40,aes(x=value, fill=factor(block, levels=c(1,2), labels=c("block1", "block2")), color=factor(block, levels=c(1,2), labels=c("block1", "block2"))), alpha=0.3, size=0.5)+
+  scale_fill_manual("", values=c("orange", "slateblue1"))+
+  scale_color_manual("",values=c("orange", "slateblue1"))+
+  theme_classic()+
+  xlim(c(0,1))+
+  xlab("pearson replicate correlations")+
+  theme(axis.title=element_text(size=8), legend.position = "top", legend.title=element_blank(),legend.key.height= unit(0.2, 'cm'),
+        legend.key.width= unit(0.2, 'cm'))
+ggsave(paste0("Figs/Fig1/Fig1H_summary_replicate_correlations.png"), height=2.5, width=2)
+
+```
+
+# mean replicate correlations
+```{r}
+correlations_pearson_long<-as.data.table(correlations_pearson_long)
+correlations_pearson_long[str_count(library, "_")==2, assay:="binding"]
+correlations_pearson_long[str_count(library, "_")==1, assay:="abundance"]
+correlations_pearson_long[,.(mean_cor=mean(value)), .(block)]
+correlations_pearson_long[,.(mean_cor=mean(value)), .(assay)]
+correlations_pearson_long[,.(median_cor=median(value)), .(block)]
+correlations_pearson_long[,.(median_cor=median(value)), .(assay)]
+
+summary(correlations_pearson_long$value)
+```
+
+
+

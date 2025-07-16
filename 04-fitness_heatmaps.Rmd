@@ -1,0 +1,296 @@
+---
+title: "stage3: fitness heatmaps"
+author: "Aina Martí-Aranda"
+date: "June 2025"
+output:
+  html_document:
+    toc: true
+    theme: cerulean
+    toc_float: true
+    toc_collapsed: true
+---
+```{r setup}
+base_dir<-"/Users/aa33/Library/CloudStorage/OneDrive-WellcomeSangerInstitute/001-Projects/03-PDZ_Homologs/02-DryLab/001-data_analysis/data_analysis_github/"
+knitr::opts_knit$set(root.dir = base_dir)
+setwd(base_dir)
+
+# load some variables
+load('source_variables.RData')
+
+
+library(data.table)
+aln_table<-as.data.table(read.table(paste0("data/annotations/tmp_files/tcoffee_structural_alignment.csv")))
+modifications_libraries<-as.data.table(read.table("tmp_tables/fitness_tables_modifications.csv", sep=",", header=T))
+pdb_metrics_dt<-as.data.table(read.csv("data/annotations/structure_metrics.csv", sep=" "))
+```
+
+
+
+
+## libraries used for the analysis
+```{r, warning=F, results='hide', message=FALSE}
+library(car)
+library(systemfonts)
+library(plyr)
+library(ggiraph)
+library(ggiraphExtra)
+library(rstatix)
+library(data.table)
+library(dplyr)
+library(seqinr)
+library(stringr)
+library(ggplot2)
+library(Matrix)
+library(viridis)
+library(ggpubr)
+library(readxl)
+library(stringi)
+library(GGally)
+library("readxl")
+library(modelr)
+library(cowplot)
+library(Hmisc)
+library(ggrepel)
+library(dplyr) 
+library(ddpcr)
+library(ggpointdensity)
+library(ggpmisc)
+library(scales)
+library(tidyr)
+library(magick)
+library(data.table)
+```
+
+# load fitness data and plot big heatmaps (only singles)
+```{r message=TRUE, warning=TRUE}
+# to annotate uniprot start positions
+start_positions<-c(311, 311, 157, 157, 157, 123, 123, 1,1,1,1321,1321)
+start_positions_dt<-data.table(libraries_names,start_positions)
+colnames(start_positions_dt)[1]<-"library"
+
+
+big_heatmaps_list<-list()
+small_heatmap_list<-list()
+counter=1
+
+for(lib in libraries_names){
+  print(paste0("processing library ", lib))
+  
+  # load data
+  if(lib %in% modifications_libraries$library){
+     singles_table<-as.data.table(read.table(paste0("tmp_tables/singles_fitness/singles_modified_background_", lib, ".csv"), sep=",", header=T))
+  }
+  else{singles_table<-as.data.table(read.table(paste0("tmp_tables/singles_fitness/singles_original_background_", lib, ".csv"), sep=",", header=T))}
+  
+  # prepare table to run heatmaps function
+  singles_table[,WT_aa:=substr(mut_id, 1,1)]
+  singles_table[,Mut:=substr(mut_id, nchar(mut_id),nchar(mut_id))]
+  singles_table[,Pos:=extract_numeric(mut_id)]
+  singles_table<-left_join(singles_table, start_positions_dt)
+  #singles_table[, Pos_original:=Pos+start_positions-1]
+  singles_table[, Pos:=Pos+start_positions-1]
+  
+  # build heatmap
+   big_heatmap<-gg_heatmap_fitness_norm(singles_table[!is.na(Pos)], aa_order, colors_aa, libraries_names, counter, 0)+theme(axis.title.x = element_blank())
+  big_heatmaps_list[[counter]]<-big_heatmap
+  big_heatmap+theme(legend.position="none", axis.text.x=element_text(size=20, face="bold"))
+  ggsave(paste0("Figs/Fig1/fitness_heatmaps/normalized_", lib, "_heatmap.png"), width=18, height=6)
+  
+  counter=counter+1
+}
+```
+
+
+# aligned heatmaps
+```{r}
+libraries_names__<-c()
+singles_table_medians_complete<-data.table()
+singles_table_all<-data.table()
+for(lib in libraries_names){
+  print(paste0("processing library ", lib))
+  
+  # load data
+  if(lib %in% modifications_libraries$library){
+     singles_table<-as.data.table(read.table(paste0("tmp_tables/singles_fitness/singles_modified_background_", lib, ".csv"), sep=",", header=T))
+  }
+  else{singles_table<-as.data.table(read.table(paste0("tmp_tables/singles_fitness/singles_original_background_", lib, ".csv"), sep=",", header=T))}
+  
+  singles_table_all<-rbind(singles_table_all, singles_table, fill=TRUE)
+  
+  # prepare table to run heatmaps function
+  singles_table[,WT_aa:=substr(mut_id, 1,1)]
+  singles_table[,Mut:=substr(mut_id, nchar(mut_id),nchar(mut_id))]
+  singles_table[,Pos:=extract_numeric(mut_id)]
+  
+  #calculate the medians
+  singles_table_medians<-singles_table[,median(fitness_norm), by=.(Pos)]
+  setnames(singles_table_medians, "V1", "median_fitness_norm")
+  
+  # merge with pdb metrics (for the alignment positions)
+  singles_table_medians<-left_join(singles_table_medians, pdb_metrics_dt[library==lib])
+  
+  lib_name<-gsub("_", "-", gsub(" binding ", " | ", libraries_names_plots[which(libraries_names==lib)]))
+  libraries_names__<-c(libraries_names__, lib_name)
+  singles_table_medians$lib_name<-lib_name
+  
+  singles_table_medians_complete<-rbind(singles_table_medians_complete, singles_table_medians)
+}
+
+#fwrite(singles_table_all, paste0("tmp_tables/all_fitness_singles_modified.csv"))
+
+#plot alignment binding
+pdb_metrics_dt_tmp<-pdb_metrics_dt[is.na(str_extract(library, "abundance")),c("pdz_name", "library", "Pos", "binding_interface_contacts")]
+pdb_metrics_dt_tmp[is.na(binding_interface_contacts),binding_interface_contacts:=F ]
+aln_table_BI<-left_join(pdb_metrics_dt_tmp[!is.na(library)], aln_table[!is.na(Pos) & !is.na(library)])
+
+gg_heatmap_fitness_alignment(singles_table_medians_complete[is.na(str_extract(lib_name, "abundance")),][order(library, decreasing = T)], c(rep("black", 7)), unique(singles_table_medians_complete[is.na(str_extract(lib_name, "abundance")),]$lib_name), counter) 
+
+
+ggplot(singles_table_medians_complete[is.na(str_extract(lib_name, "abundance")) & !is.na(lib_name) & !is.na(library),], aes(x = as.factor(structural_alignment_pos), y = factor(library, levels=libraries_binding_names, labels=gsub("_", "-", libraries_names_plots[is.na(str_extract(libraries_names_plots, "abundance"))])))) + 
+  xlab("structural alignment position") + 
+  ylab("") + 
+  geom_tile(aes(fill = median_fitness_norm)) + 
+  theme_classic(base_size = 16) + 
+  scale_x_discrete(limits = as.factor(c(1:129)), 
+        breaks = seq(1, 129, 3)) + 
+  #scale_y_discrete(limits = libraries_order) + 
+  scale_fill_gradient2("Median fitness\nnormalized", low = "red", 
+            mid = "grey91", high = "blue", midpoint = 0, na.value = "grey50") + 
+        
+  theme(plot.title = element_text(size = 35)) + 
+  theme(panel.spacing.x = unit(0.1, 
+        "lines"), axis.ticks.x = element_blank(), panel.grid.minor = element_blank(), 
+        axis.text.y = element_text(size = 20, #color = libraries_colors, 
+            face = "bold"), plot.margin = unit(c(1, 0, 0, 0), 
+            "cm"), legend.text = element_text(size = 15), 
+        legend.title = element_text(size = 20)) + 
+  geom_text(data=aln_table_BI[!is.na(library) & !is.na(lib_name) & !library %in% tolower(pdz_names)], size = 5, aes(label = WT, y=factor(library, levels=libraries_binding_names, labels=gsub("_", "-", libraries_names_plots[is.na(str_extract(libraries_names_plots, "abundance"))]))))+
+  geom_tile(data = aln_table_BI[binding_interface_contacts==T& !is.na(library) & !is.na(lib_name)], aes(y=factor(library, levels=libraries_binding_names, labels=gsub("_", "-", libraries_names_plots[is.na(str_extract(libraries_names_plots, "abundance"))]))), fill = "transparent", color="black", size = 1)#+
+  #scale_y_discrete(limits = rev(unique(singles_table_medians_complete[nchar(library)==7,]$lib_name)))
+
+ggsave(paste0("Figs/Fig1/Fig1J_aligned_heatmap_binding.png"), width=25, height=4)
+
+#plot alignment folding
+aln_table$lib_name<-paste0(gsub("_", "-", aln_table$pdz_name), " abundance")
+gg_heatmap_fitness_alignment(singles_table_medians_complete[!is.na(str_extract(lib_name, "abundance")) & !is.na(Pos),], rep("black", 5),unique(singles_table_medians_complete[!is.na(str_extract(lib_name, "abundance")),]$lib_name), counter)+
+  scale_y_discrete(limits = rev(unique(singles_table_medians_complete[!is.na(str_extract(lib_name, "abundance")),]$lib_name)))+
+   geom_text(data=aln_table[WT!="-" & !is.na(str_extract(lib_name, "abundance"))], size = 5, aes(label = WT, x=structural_alignment_pos, y=lib_name))
+#c("#e60049", "#ffa300", "#bd7ebe", "#50e991", "#0bb4ff")
+
+ggsave(paste0("Figs/Fig1/Fig1J_aligned_heatmap_folding.png"), width=25, height=3)
+
+
+```
+
+
+# shapes ggdraw 
+```{r}
+for(lib in libraries_names){
+  
+  fitness_all_subset<-singles_table_medians_complete[library==lib]
+  pdz_name<-unique(fitness_all_subset$pdz_name)
+  if(pdz_name %in% c("PSD95_PDZ2", "ERBIN_PDZ1")){point_height=1.05}
+  if(pdz_name%in% c("PSD95_PDZ3")){point_height=1.03}
+  if(pdz_name %in% c("NHERF3_PDZ2")){point_height=1.11}
+  if(pdz_name %in% c("NHERF3_PDZ1")){point_height=1.09}
+  
+  p<-ggplot(fitness_all_subset,aes(x=as.factor(Pos), y=factor(library)))+
+    xlab("")+
+    ylab("")+
+    geom_tile(aes(fill=median_fitness_norm), color="black")+ 
+    theme_void(base_size = 16)+
+    scale_x_discrete(limits = seq(1, max(fitness_all_subset$Pos, na.rm = T), 1))+
+    scale_fill_gradient2(limits=c(-2.5, 1),"median \nfitness \nnormalized",low="red",mid="grey90",high="blue",midpoint=0, na.value = "white")+
+    theme( plot.title = element_text(size=20))+
+    #guides(fill=guide_legend(title="weighted mean \nfitness normalized"))+
+    theme( panel.spacing.x = unit(0.1, "lines"), 
+           legend.position = "none")+#,
+           #strip.text = element_text(size=10)) + 
+    ggtitle(paste0(""))+
+    geom_point(data=fitness_all_subset[binding_interface_contacts==T], aes(y=point_height), shape=21, fill="red", size=2) #+ 
+  
+  ggsave(paste0("Figs/Fig1/colored_heatmap/", lib, ".png"), width=10, height=1.5)
+    #geom_text( size=3, aes(x=as.factor(structural_alignment_pos), y=library, label = WT_aa, fontface="bold"))
+
+p
+}
+```
+
+
+```{r}
+# do not execute for now
+for(lib in libraries_names){
+  print(lib)
+  path_image<-paste0("Figs/Fig1/colored_heatmap/", lib,".png")
+  path_shape<-paste0("data/shapes/", lib, "_shape.png")
+  out_path<-paste0("Figs/Fig1/colored_shapes/", lib, "_median_fitness.png")
+  crop_heatmap_structure_shape_outline(path_image, path_shape, out_path)
+}
+```
+
+
+
+# scatterplots F vs binding FITNESS
+```{r}
+singles_table_all<-data.table()
+libraries_binding_names<-libraries_names[lapply(str_extract_all(libraries_names, "_"), length)==2]
+for(lib in libraries_binding_names){ # for each library in binding
+  
+  #data binding
+  if(lib %in% modifications_libraries$library){
+     singles_table_b<-as.data.table(read.table(paste0("tmp_tables/singles_fitness/singles_modified_background_", lib, ".csv"), sep=",", header=T))
+  }
+  else{singles_table_b<-as.data.table(read.table(paste0("tmp_tables/singles_fitness/singles_original_background_", lib, ".csv"), sep=",", header=T))}
+  
+  
+  # get also the library in folding
+  lib_ab<- sub("^(([^_]+)_([^_]+))_.*", "\\1", lib)
+  if(lib_ab %in% modifications_libraries$library){
+     singles_table_f<-as.data.table(read.table(paste0("tmp_tables/singles_fitness/singles_modified_background_", lib_ab, ".csv"), sep=",", header=T))
+  }
+  else{singles_table_f<-as.data.table(read.table(paste0("tmp_tables/singles_fitness/singles_original_background_", lib_ab, ".csv"), sep=",", header=T))}
+  
+  #join the data
+  singles_table_<-left_join(singles_table_b[,.(mut_id, fitness_norm)], singles_table_f[,.(mut_id, fitness_norm)], suffix = c("_b", "_f"), by=c("mut_id"))
+  singles_table_[,Pos:=extract_numeric(mut_id)]
+  singles_table_<-left_join(singles_table_, singles_table_medians_complete[library==lib, .(structural_alignment_pos, Pos, structure_location, binding_interface_contacts)])
+  
+  singles_table_[,class:=structure_location]
+  singles_table_[binding_interface_contacts==T,class:="binding_interface"]
+  
+  singles_table_$library<-lib
+  singles_table_all<-rbind(singles_table_all, singles_table_)
+  
+  lib_name<-gsub("_", "-", gsub(" binding ", " | ", libraries_names[which(libraries==lib)]))
+  lib_ab_name<-gsub("_", "-", gsub(" binding ", " | ", libraries_names[which(libraries==lib_ab)]))
+  
+}
+```
+
+
+```{r}
+
+singles_table_all$library_name<-gsub("_", "-", gsub(" binding ", "\n", (unlist(lapply(singles_table_all$library, lib_code_to_name, libraries, libraries_names)))))
+singles_table_all$library_name<-gsub(" abundance", "\nabundance", singles_table_all$library_name)
+
+
+ggplot(singles_table_all[!is.na(class)][order(class, decreasing = T)])+
+    geom_vline(aes(xintercept = 0), color="grey")+
+    geom_hline(aes(yintercept = 0), color="grey")+
+    geom_point(aes(x=fitness_norm_f, y=fitness_norm_b, color=class), alpha=0.5, size=1.5)+
+    theme_classic()+
+    ylab(paste("fitness", lib_name))+
+    xlab(paste("fitness", lib_ab_name))+
+    scale_color_manual(values=c("red", "green3", "blue"))+
+    theme(legend.position="none")+
+  facet_wrap(~library_name, nrow=1)+
+  theme(legend.position="none",
+        strip.text.x = element_text(size = 8, face = "bold"),
+        strip.background = element_rect(color="grey", fill="white", size=1.5, linetype="solid"
+     ))+
+  xlab("abundancePCA normalized fitness")+
+  ylab("bindingPCA\nnormalized fitness")
+ggsave(paste0("Figs/Fig1/", "FigS1D_f_vs_b_scatters.png"), width=15, height=2.6)
+```
+
+

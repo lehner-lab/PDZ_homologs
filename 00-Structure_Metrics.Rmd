@@ -1,0 +1,422 @@
+---
+title: "Annotate PDZs structure metrics"
+author: "Aina Martí-Aranda"
+date: "June 2025"
+output:
+  html_document:
+    toc: true
+    theme: cerulean
+    toc_float: true
+    toc_collapsed: true
+---
+# libraries used for the analysis
+```{r message=FALSE, warning=FALSE}
+library(data.table)
+library(ggplot2)
+library(bio3d)
+library(car)
+library(systemfonts)
+library(plyr)
+library(ggiraph)
+library(ggiraphExtra)
+library(rstatix)
+library(data.table)
+library(dplyr)
+library(seqinr)
+library(stringr)
+library(ggplot2)
+library(Matrix)
+library(viridis)
+library(ggpubr)
+library(readxl)
+library(stringi)
+library(GGally)
+library("readxl")
+library(modelr)
+library(cowplot)
+library(ggpointdensity)
+library("Biostrings")
+library(tidyr)
+```
+
+
+
+# variables
+```{r setup}
+base_dir<-"/Users/aa33/Library/CloudStorage/OneDrive-WellcomeSangerInstitute/001-Projects/03-PDZ_Homologs/02-DryLab/001-data_analysis/data_analysis_github/"
+setwd(base_dir)
+
+# load some data
+load(paste0('source_variables.RData'))
+assays_info<-as.data.table(read_xlsx("data/assays_info.xlsx"))
+assays_info[,library:=paste0(pdz_name, "_", ligand_name)]
+
+aa_mapping <- c(
+  ALA = "A", ARG = "R", ASN = "N", ASP = "D", CYS = "C", 
+  GLU = "E", GLN = "Q", GLY = "G", HIS = "H", ILE = "I", 
+  LEU = "L", LYS = "K", MET = "M", PHE = "F", PRO = "P", 
+  SER = "S", THR = "T", TRP = "W", TYR = "Y", VAL = "V"
+)
+```
+
+
+# 2. SECONDARY STRUCTURE INFO (helix,sheet,rsasa)
+I am just using the secondary structures from predicted folding structures (no ligand)
+```{r}
+# Initialize data.table to store secondary structures
+secondary_structures <- data.table()
+
+# Process each PDZ library
+for (pdz_name in libraries_folding_names) {
+  print(paste0("reading: data/structures/alphafold3/", pdz_name, ".pdb"))
+  
+  # Read PDB structure
+  struct <- read.pdb(paste0("data/structures/alphafold3/", pdz_name, ".pdb"))
+  pdb_table <- as.data.table(struct[1])
+  
+  # Extract chain A sequence and residue numbers
+  residue_numbers <- sort(unique(pdb_table[atom.chain == "A" & atom.type == "ATOM"]$atom.resno))
+  num_residues <- length(residue_numbers)
+  pdz_name_<-toupper(pdz_name)
+  print(pdz_name_)
+  
+  # Create a temporary table for the secondary structure
+  temporary_table <- data.table(
+    WT_aa = pdbseq(struct), 
+    Pos = residue_numbers, 
+    Uniprot_pos_ref = residue_numbers+assays_info[pdz_name==pdz_name_ & assay=="abundance"]$start-1,
+    secondary_structure = "loop"
+  )
+  
+  # Annotate regions
+  temporary_table[,secondary_structure:= "loop"]
+  temporary_table[Pos %in% unlist(mapply(`:`, struct$helix$start, struct$helix$end)), 
+                secondary_structure := "helix"]
+  temporary_table[Pos %in% unlist(mapply(`:`, struct$sheet$start, struct$sheet$end)), 
+                secondary_structure := "sheet"]
+  
+  # Add PDZ identifier
+  temporary_table[, pdz := pdz_name]
+  
+  
+  # read and add RSASA values [calculated in Jupyter notebook file]
+  rsasa_filename<-paste0("data/annotations/RSASA_files/fold_", pdz_name,"_rsasa.csv")
+  rsasa_file<-as.data.table(read.csv(rsasa_filename, sep="\t")[,-1])
+ 
+  colnames(rsasa_file)[1]<-"Pos"
+  len_prot<-nrow(rsasa_file)
+  
+  #STORE WT AA, PDZ and RSASA
+  rsasa_temporary<-as.data.table(left_join(temporary_table, rsasa_file, by=c("Pos")))
+  
+  #get residue position in the structure (core/surface)
+  rsasa_temporary[,structure_location:="surface"]
+  rsasa_temporary[rsasa<0.25]$structure_location<-"core"
+  
+  # Append results
+  secondary_structures <- rbind(secondary_structures, rsasa_temporary, fill = TRUE)
+
+}
+# save the results
+write.csv(secondary_structures, paste0("data/annotations/tmp_files/secondary_structures_and_rsasa.csv"), row.names = FALSE)
+
+```
+
+## rsasa for files with the ligand
+```{r}
+# Load required files
+secondary_structures<-as.data.table(read.csv(paste0("data/annotations/tmp_files/secondary_structures_and_rsasa.csv")))
+
+# Initialize data.table to store secondary structures
+rsasa_ligands_table <- data.table()
+counter=1
+for(lib in libraries_binding_names){
+  print(paste0("reading: ", lib))
+  
+  rsasa_file<-as.data.table(read.csv(paste0("data/annotations/RSASA_files/fold_", lib, "_rsasa.csv"), sep="\t")[,-1])
+  colnames(rsasa_file)[1]<-"Pos"
+  len_prot<-nrow(rsasa_file)
+  
+  #STORE WT AA, PDZ and RSASA
+  secondary_structures_tmp<-secondary_structures[pdz %in% str_extract(lib, pdz)]
+  rsasa_temporary<-as.data.table(left_join(secondary_structures_tmp[,.(Pos, WT_aa)], rsasa_file, by=c("Pos")))
+  colnames(rsasa_temporary)[3]<-"rsasa_w_ligand"
+  rsasa_temporary[,library:=lib]
+  
+  # Append results
+  rsasa_ligands_table <- rbind(rsasa_ligands_table, rsasa_temporary, fill = TRUE)
+  
+  counter=counter+1
+}
+
+# save the results
+write.csv(rsasa_ligands_table, "data/annotations/tmp_files/rsasa_ligands_table.csv", row.names = FALSE)
+```
+
+
+
+# 3. LIGAND DISTANCES INFO
+
+```{r}
+# Initialize the distance matrix
+distance_matrix <- data.table()
+
+# Process each library
+for (lib in libraries_binding_names) {
+  print(paste0("reading: ", lib))
+  ligand <- unlist(strsplit(assays_info[library==toupper(lib)]$ligand_sequence, ""))
+  
+  # Compute ligand distances
+  pdb_dists_per_res <- doubledeepms__minimum_interchain_distances_from_PDB_perres(
+    input_file = paste0("data/structures/alphafold3/", lib, ".pdb")
+  )
+  
+  # Standardize table 
+  pdb_dists_per_res[, Uniprot_pos_ref := Pos+assays_info[library==toupper(lib)]$start-1]
+  pdb_dists_per_res[, library := lib]
+  
+  # Add binding interface information
+  pdb_dists_per_res[, binding_interface_5A := scHAmin_ligand <= 5]
+  
+  # Append results to the distance matrix
+  distance_matrix <- rbind(distance_matrix, pdb_dists_per_res)
+}
+
+# Save the complete distance matrix
+write.csv(distance_matrix, file = paste0("data/annotations/tmp_files/ligand_distances.csv"), row.names = FALSE)
+```
+
+
+# 4. CONTACTS INFO
+```{r}
+# code from Taraneh's paper
+contacts_complete_table<-data.table()
+interactions_processed_complete_table<-data.table()
+counter=1
+for (lib in libraries_binding_names){
+  pdz_seq<-assays_info[library==toupper(lib)]$pdz_sequence[1]
+  sequence=unlist(strsplit(pdz_seq,""))
+  
+  ligand_seq<-assays_info[library==toupper(lib)]$ligand_sequence[1]
+  lig_sequence=unlist(strsplit(ligand_seq,""))
+
+  #load contacts results file
+  print(paste0("reading: ", "data/annotations/contacts_files/", lib,"_contacts.tsv"))
+  
+  get_contacts_results <- as.data.table(read.delim(paste0("data/annotations/contacts_files/", lib,"_contacts.tsv"), skip=2, header=F))
+  colnames(get_contacts_results)<-c("frame", "interaction_type", "atom_1", "atom_2")
+  get_contacts_results[, library:=lib]
+
+  #concatenate the raw table
+  contacts_complete_table<-rbind(contacts_complete_table, get_contacts_results)
+  
+  #process the table in an easier format
+  # Separate the last two columns by ":"
+  get_contacts_results[, c("chain_1", "residue_name_1", "Pos_1", "atom_1_split") := tstrsplit(atom_1, ":", fixed = TRUE)]
+  get_contacts_results[, c("chain_2", "residue_name_2", "Pos_2", "atom_2_split") := tstrsplit(atom_2, ":", fixed = TRUE)]
+  
+  # Convert positions to numeric for easier aggregation
+  get_contacts_results[, Pos_1 := as.numeric(Pos_1)]
+  get_contacts_results[, Pos_2 := as.numeric(Pos_2)]
+  
+  #invert the table and row bind (to have all interaction residues as residue_1)
+  get_contacts_results_inverted<-get_contacts_results[,c("frame", "interaction_type", "atom_1", "atom_2")]
+  get_contacts_results_inverted[, c("chain_1", "residue_name_1", "Pos_1", "atom_1_split") := tstrsplit(atom_2, ":", fixed = TRUE)]
+  get_contacts_results_inverted[, c("chain_2", "residue_name_2", "Pos_2", "atom_2_split") := tstrsplit(atom_1, ":", fixed = TRUE)]
+  
+  get_contacts_results_complete<-rbind(get_contacts_results[,c("chain_1", "residue_name_1", "Pos_1", "atom_1_split","chain_2", "residue_name_2", "Pos_2", "atom_2_split", "interaction_type")], get_contacts_results_inverted[,c("chain_1", "residue_name_1", "Pos_1", "atom_1_split","chain_2", "residue_name_2", "Pos_2", "atom_2_split", "interaction_type")])
+  
+  get_contacts_results_complete[, ligand_backbone_contact:=atom_2_split %in% c("CA", "C", "N", "O")]
+  get_contacts_results_complete[, pdz_backbone_contact:=atom_1_split %in% c("CA", "C", "N", "O")]
+  
+  # Aggregate by Pos_1 with a list of interaction_types
+aggregated_interactions <- get_contacts_results_complete[
+  , .(interaction_types = paste0(unique(interaction_type), collapse=","), interaction_types_all = paste0(interaction_type, collapse=","), 
+      num_contacts = .N,
+      pdz_backbone_contact = any(pdz_backbone_contact),
+      pdz_sidechain_contact = any(pdz_backbone_contact==F),
+      ligand_backbone_contact = any(ligand_backbone_contact),
+      ligand_sidechain_contact = any(ligand_backbone_contact==F)), 
+  by = .(chain_1, residue_name_1, Pos_1, chain_2, residue_name_2, Pos_2)]
+
+  aggregated_interactions[, residue_1_letter := aa_mapping[residue_name_1]]
+  aggregated_interactions[, residue_2_letter := aa_mapping[residue_name_2]]
+  aggregated_interactions[,library:=lib]
+  
+  #concatenate the tables
+  interactions_processed_complete_table<-rbind(interactions_processed_complete_table, aggregated_interactions)
+  
+counter=counter+1
+}
+interactions_processed_complete_table[,interaction_types:=paste0(interaction_types)]
+
+#save a complete table
+write.csv(interactions_processed_complete_table, paste0("data/annotations/tmp_files/contacts_table_complete.csv"))
+
+```
+
+
+
+# 6. ALIGNMENT
+## [USED] T-coffee structural alignment of only my 6 PDZs
+T-coffe could not run with so many sequences and it could not find proper PDBs where to base the structural alignment from. So I am using tcoffe with only my 5 PDZs
+
+```{r warning=FALSE}
+ids_my_pdzs=c("P78352_DLG4_HUMAN_PDZ-3", "P78352_DLG4_HUMAN_PDZ-2", "Q5T2W1_NHRF3_HUMAN_PDZ-2", "Q5T2W1_NHRF3_HUMAN_PDZ-1", "Q96RT1_ERBIN_HUMAN_PDZ-1")
+
+alignment <- readAAStringSet(paste0("data/annotations/structural_alignment_tcoffee.fasta"), format = "fasta")
+
+names(alignment)<-unlist(lapply(strsplit(names(alignment), " "), "[[", 1))
+
+aln_table<-as.matrix(alignment)
+aln_table_<-as.data.table(aln_table)
+aln_table_$id<-unlist(lapply(strsplit(names(alignment), " "), "[[", 1))
+rownames(aln_table_)<-rownames(aln_table)
+aln_table<-as.data.table(aln_table)
+
+
+# make a table with the alignment positions
+PDZ_names<-c("PSD95_PDZ3",  "PSD95_PDZ2",  "SNTA1_PDZ1", "NHERF3_PDZ2", "NHERF3_PDZ1", "ERBIN_PDZ1")
+aln_table$pdz_name<-PDZ_names
+aln_table<-aln_table[pdz_name!="SNTA1_PDZ1"]
+aln_table$pdz_name<-toupper(pdz_names)
+
+# Convert to long format
+long_alignment <- melt(aln_table, id.vars =c("pdz_name"), variable.name = "alignment_position", value.name = "WT")
+
+# Add alignment positions as numeric
+long_alignment[, structural_alignment_pos := extract_numeric(alignment_position)]
+
+# Calculate raw_position (ignoring gaps '-')
+long_alignment[, Pos := cumsum(WT != "-"), by = pdz_name]
+long_alignment[WT == "-", Pos := NA]
+
+
+#calculate conservation scores
+conservation_scores<-conserv(as.matrix(aln_table), method="similarity", sub.matrix="blosum62")#[alignment_parts]
+conservation_scores<-data.table(consv=conservation_scores, structural_alignment_pos=c(1:length(conservation_scores)))
+
+#join alignment table and conservation table
+long_alignment<-left_join(long_alignment, conservation_scores, by="structural_alignment_pos")
+
+write.table(long_alignment, paste0("data/annotations/tmp_files/tcoffee_structural_alignment.csv"))
+
+```
+
+
+## sequence identity
+```{r}
+library(data.table)
+
+# Convert data.table to matrix
+aln_matrix <- as.matrix(aln_table)
+
+# Number of sequences
+num_seqs <- nrow(aln_matrix)
+
+# Initialize identity matrix
+identity_matrix <- matrix(NA, nrow = num_seqs, ncol = num_seqs, dimnames = list(1:num_seqs, 1:num_seqs))
+
+# Compute pairwise percentage identities
+for (i in 1:num_seqs) {
+  for (j in i:num_seqs) {
+    seq1 <- aln_matrix[i, ]
+    seq2 <- aln_matrix[j, ]
+    
+    # Exclude gap positions ("-") from both sequences
+    valid_positions <- (seq1 != "-") & (seq2 != "-")
+    
+    if (sum(valid_positions) > 0) {  # Avoid division by zero
+      num_identical <- sum(seq1[valid_positions] == seq2[valid_positions])
+      total_positions <- sum(valid_positions)
+      percent_identity <- (num_identical / total_positions) * 100
+    } else {
+      percent_identity <- NA
+    }
+    
+    identity_matrix[i, j] <- percent_identity
+    identity_matrix[j, i] <- percent_identity  # Since the matrix is symmetric
+  }
+}
+
+# Convert to data.table for better visualization
+identity_dt <- as.data.table(identity_matrix, keep.rownames = "Seq1")
+identity_dt
+
+# Extract non-diagonal values (excluding self-comparisons)
+non_diag_values <- identity_matrix[upper.tri(identity_matrix, diag = FALSE)]
+
+# Compute the mean percentage identity
+identity_matrix<-as.data.table(identity_matrix)
+#write.table(identity_matrix, paste0("data/annotations/tmp_files/sequence_identity.csv"))
+
+# Print result
+print(mean(non_diag_values, na.rm = TRUE))
+print(max(non_diag_values, na.rm = TRUE))
+print(min(non_diag_values, na.rm = TRUE))
+print(sd(non_diag_values, na.rm = TRUE))
+
+```
+
+
+
+
+## pairwise structural alignment RMSDs
+this is pairwise using chimeraX (manually)
+there are two measurements,
+pruned RMSD: this is the RMSD computed only from the aligned residues
+"all" RMSD: this is the RMSD computed from "all the residue pairs"
+
+I am presenting the "all" RMSD here from the pairwise superimposition of the structures 
+```{r}
+list_rmsd_values<-c(1.956,2.925,1.854,1.948,2.433,1.948,2.155,5.654,2.151,3.082)
+print(mean(list_rmsd_values))
+print(median(list_rmsd_values))
+print(max(list_rmsd_values))
+print(min(list_rmsd_values))
+```
+
+
+
+
+
+# 5. BINDING INTERFACE (FROM CONTACTS)
+```{r}
+interactions_processed_complete_table<-as.data.table(read.csv("data/annotations/tmp_files/contacts_table_complete.csv"))[,-c("X")]
+#in this case N is the number of ligand residues that it contacts
+contacts_ligand_n<-interactions_processed_complete_table[chain_1=="A" & chain_2=="B", .N, by=.(library, Pos_1, residue_name_1)]
+setnames(contacts_ligand_n, "Pos_1", "Pos")
+contacts_ligand_n[,binding_interface_contacts:=T]
+contacts_ligand_n[, pdz_name := toupper(sub("_[^_]+$", "", library))]
+
+contacts_ligand_n<-left_join(contacts_ligand_n, long_alignment[,c( "Pos", "pdz_name", "structural_alignment_pos")], by=c("pdz_name", "Pos"))
+core_bi_n<-contacts_ligand_n[, .N, by=.(structural_alignment_pos)][N>=7]
+contacts_ligand_n[, core_bi_contacts:=structural_alignment_pos %in% core_bi_n$structural_alignment_pos]
+
+write.csv(contacts_ligand_n, paste0("data/annotations/tmp_files/binding_interface_contacts.csv"))
+```
+
+
+# join all the metrics
+```{r}
+#binding data
+distance_matrix[, pdz_name := toupper(sub("_[^_]+$", "", library))]
+all_metrics<-merge(distance_matrix, long_alignment, by=c("pdz_name", "Pos"), all=T)
+setnames(all_metrics, "WT", "WT_aa")
+
+contacts_ligand_n[, pdz_name := toupper(sub("_[^_]+$", "", library))]
+all_metrics<-as.data.table(merge(contacts_ligand_n[,-c("N", "residue_name_1")], all_metrics, by=c("library", "Pos", "pdz_name", "structural_alignment_pos"), all=T))
+
+secondary_structures$pdz<-toupper(as.character(secondary_structures$pdz))
+colnames(secondary_structures)[5]<-"pdz_name"
+all_metrics<-as.data.table(merge(all_metrics, secondary_structures, by=c("WT_aa", "pdz_name", "Pos"), all=T))
+
+#add abundance
+all_metrics_ab<-as.data.table(merge(long_alignment, secondary_structures, by=c("pdz_name", "Pos"), all=T))
+all_metrics_ab[,library:=tolower(pdz_name)]
+
+#join all together
+all_metrics<-rbind(all_metrics, all_metrics_ab, fill=T)
+
+write.table(all_metrics, paste0("data/annotations/structure_metrics.csv"))
+```

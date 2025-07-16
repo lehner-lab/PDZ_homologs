@@ -1,0 +1,2134 @@
+---
+title: "7 allosteric maps"
+author: "Aina Martí-Aranda"
+date: "June 2025"
+output:
+  html_document:
+    toc: true
+    theme: cerulean
+    toc_float: true
+    toc_collapsed: true
+---
+# initializing
+```{r setup}
+base_dir<-"/Users/aa33/Library/CloudStorage/OneDrive-WellcomeSangerInstitute/001-Projects/03-PDZ_Homologs/02-DryLab/001-data_analysis/data_analysis_github/"
+knitr::opts_knit$set(root.dir = base_dir)
+setwd(base_dir)
+
+# load some variables
+load('source_variables.RData')
+```
+
+## libraries used for the analysis
+```{r message=FALSE, warning=FALSE}
+library(car)
+library(systemfonts)
+library(plyr)
+library(ggiraph)
+library(ggiraphExtra)
+library(rstatix)
+library(data.table)
+library(dplyr)
+library(seqinr)
+library(stringr)
+library(ggplot2)
+library(Matrix)
+library(viridis)
+library(ggpubr)
+library(readxl)
+library(stringi)
+library(GGally)
+library(readxl)
+library(modelr)
+library(cowplot)
+library(Hmisc)
+library(ggrepel)
+library(dplyr) 
+library(ddpcr)
+library(ggpointdensity)
+library(tidyr)
+library(magick)
+library(ggpointdensity)
+library(ggpmisc)
+library(ggridges)
+```
+
+
+# load the data
+
+```{r}
+all_ddg_table<-as.data.table(read.csv(paste0("tmp_tables/all_ddg_table.csv")))
+all_median_ddg_table<-as.data.table(read.csv(paste0("tmp_tables/all_median_ddg_table.csv")))
+pdb_metrics_dt<-as.data.table(read.csv("data/annotations/structure_metrics.csv", sep=" "))
+aln_table<-as.data.table(read.table(paste0("data/annotations/structural_alignment_tcoffee.csv")))
+get_contacts_dt<-as.data.table(read.csv("data/annotations/tmp_files/contacts_table_complete.csv", sep=","))
+BI_hotspots_dt<-fread(paste0("tmp_tables/BI_hotspots_dt.csv"))
+all_allo_table<-as.data.table(read.csv("tmp_tables/allostery_individualCurves_mutationLevel_noBI.csv", sep=" "))
+load(paste0("tmp_tables/all_bi.Rdata"))
+load(paste0("tmp_tables/core_bi.Rdata"))
+load(paste0("tmp_tables/BI_hotspots.Rdata"))
+```
+
+
+# ddG distributions outside of the binding interface: 
+```{r, fig.width=5, fig.height=5}
+all_ddg_table_binding<-all_ddg_table[assay=="binding"]
+all_ddg_table_binding$library_name<-gsub("_", "-", gsub(" binding ", "\n", (unlist(lapply(all_ddg_table_binding$library, lib_code_to_name, libraries, libraries_names)))))
+
+
+ggplot(all_ddg_table_binding[!structural_alignment_pos %in% all_bi], aes(x=ddg))+
+  #geom_density(scale="width", size=1, aes(color=library))+#color="grey30", fill="grey80",
+  theme_classic()+
+  xlab("∆∆Gb outside of the\nbinding interface")+
+  theme(#legend.key.size = unit(0.3, 'cm'),
+        #legend.text = element_text(size=7),
+        legend.position = "none",
+        axis.title.x=element_blank(),
+        axis.text.x=element_text(angle=90, vjust=0.5))+
+  xlim(c(-1.5,3))+
+  #scale_color_brewer(palette="Set2")+
+  #scale_fill_brewer(palette="Set2")+
+  geom_density_ridges2(aes(y=library_name), scale = 1.6, alpha=0.8,fill="grey80", color="grey50")+
+  coord_flip()+
+  theme(axis.text.x=element_text(hjust=1))+
+  theme(axis.text.x=element_text(size=10,face="bold", color="black"), 
+        axis.text.y=element_text(size=13,face="bold", color="black"),
+        axis.title.y=element_text(size=13,face="bold", color="black"),
+        axis.title.x=element_blank())
+
+ggsave(paste0("Figs/Fig4/Fig4Addg_distributions.png"), width=4, height=3.5)
+```
+
+# Decay curves in PDZ domains
+## d1/2 values in PDZ domains
+Plotting absolute ∆∆Gb against the Euclidean distance to the nearest ligand residue reveals a strikingly conserved relationship across all seven interactions: the probability of a mutation causing a change in binding energy decays with the distance from the binding interface, with a 50% reduction of allosteric effects over a median distance d1/2 = 6.9 Å (Fig. 4b,c). 
+```{r}
+# studying the d1/2 values of these curves
+curve_coefficients<-all_allo_table[,.(a=coef_individual_curve_a[1], b=coef_individual_curve_b[1]), by=.(library)]
+curve_coefficients[,half_ddg := a / 2 ] # 50% reduction
+curve_coefficients[,half_d:=log(half_ddg / a) / b]
+summary(curve_coefficients$half_d)
+summary(curve_coefficients$a)
+summary(curve_coefficients$b)
+```
+
+## plot of decay curves in PDZ domains
+```{r, fig.width=5, fig.height=5}
+library(ggnewscale)
+library(RColorBrewer)
+library(ggh4x)
+all_allo_table$library_name<-gsub("_", "-", gsub(" binding ", " | ", (unlist(lapply(all_allo_table$library, lib_code_to_name, libraries_binding, libraries_binding_names)))))
+curve_coefficients$library_name<-gsub("_", "-", gsub(" binding ", " | ", (unlist(lapply(curve_coefficients$library, lib_code_to_name, libraries_binding, libraries_binding_names)))))
+
+facet_colors <- setNames(brewer.pal(length(unique(all_allo_table$library_name)), "Set2"), unique(all_allo_table$library_name))
+
+curve_coefficients[, label_half_d:=paste0("d1/2 = ", round(half_d, 2), "Å")]
+
+midpoints <- all_allo_table %>%
+  group_by(library_name) %>%
+  summarise(midpoint_x = mean(range(scHAmin_ligand)))
+
+curve_coefficients <- curve_coefficients %>%
+  left_join(midpoints, by = "library_name")
+
+curve_coefficients[, label_a:=paste0("a = ", round(a, 2))]
+curve_coefficients[, label_b:=paste0("b = ", round(b, 2))]
+
+p<-ggplot(all_allo_table, aes(x=scHAmin_ligand, y=ddg))+
+  geom_point(alpha=0.2, aes(color=binding_interface_contacts))+
+  scale_color_manual(values=c("grey30", "tomato"))+
+  new_scale_color()+
+  geom_line(aes(x=scHAmin_ligand, y=allo_predicted), color="black", size=2)+
+  scale_color_brewer(palette="Set2")+
+  facet_grid2(~library_name, strip = strip_themed(
+    text_x = elem_list_text(face = "bold", colour = "black")), scale="free_x") +
+  theme_classic()+
+  theme(legend.position="none",
+        strip.text.x = element_text(size = 10, face = "bold"),
+        strip.background = element_rect(color="grey", fill="white", size=1.5, linetype="solid"
+     ))+
+  geom_text(data=curve_coefficients, aes(label=label_half_d, x=midpoint_x, y=3), color="black", font = "bold")+
+  geom_text(data=curve_coefficients, aes(label=label_a, x=midpoint_x, y=2.8), color="black", font = "bold")+
+  geom_text(data=curve_coefficients, aes(label=label_b, x=midpoint_x, y=2.6), color="black", font = "bold")+
+  ylab("|∆∆Gb|")+
+  xlab("distance to the ligand (Å)")+
+  theme(axis.text.x=element_text(size=13,face="bold", color="black"), 
+        axis.text.y=element_text(size=13,face="bold", color="black"),
+        axis.title.y=element_text(size=13,face="bold", color="black"),
+        axis.title.x=element_text(size=13,face="bold", color="black"))
+p
+ggsave(paste0("Figs/Fig4/Fig4Bdecay_curves_pdz.png"), width=14, height=3)
+
+
+curve_coefficients_all_tested<-curve_coefficients[,model:="exclude BI (getContacts)"]
+```
+
+# Decay curves in other domains
+
+This decay is similar to that quantified for allostery in the SRC kinase domain23 (d1/2 = 8.3 Å, Extended Data Fig. 4a), KRAS for six interaction partners22 (median d1/2 = 9.50Å, Extended Data Fig. 4b), GB119 (d1/2 = 5.6 Å), and GRB2-SH3 domain19 (d1/2 = 13.6 Å, Extended Data Fig. 4c). This conserved distance-dependent decay of allosteric efficacy in nine different proteins suggests it is a general principle of allosteric communication (Fig. 4c). 
+
+## d1/2 values in GRB2 and GB1
+```{r warning=FALSE}
+andre_ddpca_ddg_dt<-as.data.table(read_xlsx(paste0("data/external_data/Andre_ddPCA_41586_2022_4586_MOESM10_ESM.xlsx"), sheet=2))[id!="-0-"]
+summary(andre_ddpca_ddg_dt$b_ddg_pred)
+
+all_ddg_table[, Mut:=substr(id, nchar(id), nchar(id))]
+all_ddg_table_tmp<-left_join(all_ddg_table[library=="psd95_pdz3_cript"][, Pos_ref:=Uniprot_pos_ref.y][, .(id,Uniprot_pos_ref, ddg, Mut)],andre_ddpca_ddg_dt[protein=="PSD95-PDZ3"][, Uniprot_pos_ref:=as.integer(Pos_ref)], by=c("Uniprot_pos_ref", "Mut"))
+```
+
+```{r}
+libraries_andre<-unique(andre_ddpca_ddg_dt$protein)
+andre_ddpca_ddg_dt[,abs_ddg:=abs(as.numeric(b_ddg_pred))]
+andre_ddpca_ddg_dt[,scHAmin_ligand:=as.numeric(scHAmin_ligand)]
+andre_ddpca_ddg_dt[,binding_interface_5A:=Pos_class=="binding_interface"]
+
+half_d_list<-list()
+a_list<-list()
+b_list<-list()
+andre_allo_curves_table<-data.table()
+c=1
+for (lib in libraries_andre){
+    print(paste0("assay: ", lib))
+    andre_grb2_ddg_dt_subset<-andre_ddpca_ddg_dt[protein==lib & !is.na(scHAmin_ligand)& !is.na(abs_ddg) & !is.na(scHAmin_ligand) & !is.na(abs_ddg) & b_ddg_pred_conf==T & abs(b_ddg_pred)<2.5]
+  
+  xvector_starting=andre_grb2_ddg_dt_subset[protein==lib & !is.na(scHAmin_ligand)& !is.na(abs_ddg) & binding_interface_5A==F & b_ddg_pred_conf==T & !is.na(scHAmin_ligand) & !is.na(abs_ddg)]$scHAmin_ligand
+    yvector_starting=abs(as.numeric(andre_grb2_ddg_dt_subset[protein==lib & !is.na(scHAmin_ligand)& !is.na(abs_ddg)& binding_interface_5A==F & b_ddg_pred_conf==T & !is.na(scHAmin_ligand) & !is.na(abs_ddg)]$abs_ddg))
+    
+    exponential_curve_fitted<-fit_exponential_curve(xvector=xvector_starting,yvector=yvector_starting,tit,plotfig=F,writepar=FALSE)
+    summary(exponential_curve_fitted)
+    exponential_estimate<-summary(exponential_curve_fitted)$coefficients[2]
+    
+    #this model is a*e**bx
+    andre_grb2_ddg_dt_subset[,allo_predicted:=coef(exponential_curve_fitted)[1]*exp(coef(exponential_curve_fitted)[2]*scHAmin_ligand)]
+    andre_grb2_ddg_dt_subset[,coef_individual_curve_a:=coef(exponential_curve_fitted)[1]]
+    andre_grb2_ddg_dt_subset[,coef_individual_curve_b:=coef(exponential_curve_fitted)[2]]
+
+    a <- coef(exponential_curve_fitted)[1]
+    b <- coef(exponential_curve_fitted)[2]
+
+    half_ddg <- a / 2  # 50% reduction
+    half_d <- log(half_ddg / a) / b
+  
+    print(paste0("HALF DDG: ", half_ddg))
+    print(paste0("HALF d: ", half_d))
+    
+    andre_grb2_ddg_dt_subset[,half_d:=half_d]
+    half_d_list[[c]]<-half_d
+    a_list[[c]]<-a
+    b_list[[c]]<-b
+    
+    c=c+1
+    
+    andre_allo_curves_table<-rbind(andre_allo_curves_table, andre_grb2_ddg_dt_subset)
+}
+```
+
+```{r, fig.width=6, fig.height=3}
+# prepare half d labels
+half_d_dt<-data.table(half_d_list)
+half_d_dt[, a:=a_list]
+half_d_dt[, b:=b_list]
+half_d_dt$protein<-libraries_andre
+
+midpoints <- andre_allo_curves_table %>%
+  group_by(protein) %>%
+  summarise(midpoint_x = mean(range(scHAmin_ligand)))
+
+curve_coefficients <- half_d_dt %>%
+  left_join(midpoints, by = "protein")
+curve_coefficients[,half_d_list:=unlist(half_d_list)]
+curve_coefficients[,label_half_d:=paste0("d1/2 = ", round(half_d_list, 3), "Å")]
+
+curve_coefficients[, label_a:=paste0("a = ", round(as.numeric(a), 2))]
+curve_coefficients[, label_b:=paste0("b = ", round(as.numeric(b), 2))]
+
+ggplot(andre_allo_curves_table[b_ddg_pred_conf==T & protein!="PSD95-PDZ3"], aes(x=scHAmin_ligand, y=abs(abs_ddg)))+
+  geom_point(alpha=0.5, size=0.5, aes(color=binding_interface_5A))+#color=scHAmin_ligand<5))+
+  scale_color_manual(values=c("grey40", "tomato"))+
+  theme_classic()+
+  new_scale_color()+
+  geom_line(aes(x=scHAmin_ligand, y=abs(allo_predicted), color=protein), size=1)+
+  scale_color_manual(values=c("black", "black"))+#values=c("seagreen", "gold"))+
+  facet_wrap(~protein, scale="free_x", nrow=1)+
+  theme()+
+  new_scale_color()+
+  theme(legend.position="none",
+        strip.text.x = element_text(size = 10, face = "bold"),
+        strip.background = element_rect(color="grey", fill="white", size=1.5, linetype="solid"
+     ))+
+  geom_text(data=curve_coefficients[protein!="PSD95-PDZ3"], aes(label=label_half_d, x=midpoint_x, y=3), color="black", font = "bold")+
+  geom_text(data=curve_coefficients[protein!="PSD95-PDZ3"], aes(label=label_a, x=midpoint_x, y=2.7), color="black", font = "bold")+
+  geom_text(data=curve_coefficients[protein!="PSD95-PDZ3"], aes(label=label_b, x=midpoint_x, y=2.4), color="black", font = "bold")+
+  ylab("|∆∆Gb|")+
+  xlab("distance to the ligand (Å)")+#+ylim(c(0,3))+
+theme(axis.text.x=element_text(size=13,face="bold", color="black"), 
+        axis.text.y=element_text(size=13,face="bold", color="black"),
+        axis.title.y=element_text(size=13,face="bold", color="black"),
+        axis.title.x=element_text(size=13,face="bold", color="black"))
+
+ggsave(paste0("Figs/Fig4/FigS4Cdecay_curves_andre.png"), width=3.7, height=2.3)
+  
+```
+
+
+## Chenchun's d1/2 value (Figure S4B)
+```{r}
+chenchun_kras_ddg_dt<-as.data.table(read_xlsx(paste0("data/external_data/Chenchun_KRAS_ddG_supplementary_table_5.xlsx"), sheet=2))
+chenchun_kras_annotations<-as.data.table(fread(paste0("data/external_data/Chenchun_KRAS_all_distance_anno.csv")))
+
+# Get the data that I want from the ddG
+chenchun_kras_ddg_dt_subset<-chenchun_kras_ddg_dt[assay!="folding", c("Pos_real", "wt_codon", "mt_codon", "mean_kcal/mol","std_kcal/mol", "assay", "ddG_conf")]
+
+
+# Join the distance data from the annotations
+chenchun_kras_annotations_subset<-chenchun_kras_annotations[,.(Pos, RAF_scHAmin_ligand, K27_scHAmin_ligand, PI3_scHAmin_ligand, RAL_scHAmin_ligand, SOS_scHAmin_ligand, K55_scHAmin_ligand, SOS1_scHAmin_ligand, SOS2_scHAmin_ligand)]
+colnames(chenchun_kras_annotations_subset)[c(2:8)]<-c("RAF1", "DARPin K27", "PIK3CG", "RALGDS", "SOS", "DARPin K55", "SOS1")
+chenchun_kras_annotations_subset_melted<-melt(chenchun_kras_annotations_subset, id.vars = "Pos")
+colnames(chenchun_kras_annotations_subset_melted)<-c("Pos", "assay", "scHAmin_ligand")
+
+
+colnames(chenchun_kras_ddg_dt_subset)[1]<-"Pos"
+chenchun_kras_ddg_dt_subset[,Pos:=as.integer(Pos)]
+chenchun_kras_ddg_dt_subset_distance<-left_join(chenchun_kras_ddg_dt_subset, chenchun_kras_annotations_subset_melted, by=c("assay", "Pos"))
+colnames(chenchun_kras_ddg_dt_subset_distance)[4]<-"ddg"
+
+# Add the BI annotation as chenchun (using distance)
+chenchun_kras_ddg_dt_subset_distance[,binding_interface_5A:=scHAmin_ligand<5]
+```
+
+Fit the decay curves
+```{r}
+libraries_chenchun<-c("RAF1", "DARPin K27", "PIK3CG", "RALGDS", "DARPin K55", "SOS1")
+chenchun_kras_ddg_dt_subset_distance<-chenchun_kras_ddg_dt_subset_distance[assay %in% libraries_chenchun]
+chenchun_kras_ddg_dt_subset_distance[,ddg_char:=ddg]
+chenchun_kras_ddg_dt_subset_distance[,ddg:=as.numeric(ddg_char)]
+
+half_d_list<-list()
+half_a<-list()
+half_b<-list()
+all_ddg_table_abs_allo_noBI<-data.table()
+c=1
+for (lib in libraries_chenchun){
+    print(paste0("assay: ", lib))
+    chenchun_kras_ddg_dt_subset_distance_subset<-chenchun_kras_ddg_dt_subset_distance[assay==lib & !is.na(scHAmin_ligand)& !is.na(ddg) & !is.na(scHAmin_ligand) & !is.na(ddg)]
+  
+  xvector_starting=chenchun_kras_ddg_dt_subset_distance[assay==lib & !is.na(scHAmin_ligand)& !is.na(ddg) & binding_interface_5A==F & !is.na(scHAmin_ligand) & !is.na(ddg)]$scHAmin_ligand
+    yvector_starting=abs(as.numeric(chenchun_kras_ddg_dt_subset_distance[assay==lib & !is.na(scHAmin_ligand)& !is.na(ddg)& binding_interface_5A==F & !is.na(scHAmin_ligand) & !is.na(ddg)]$ddg))
+    
+    exponential_curve_fitted<-fit_exponential_curve(xvector=xvector_starting,yvector=yvector_starting,tit,plotfig=F,writepar=FALSE)
+    summary(exponential_curve_fitted)
+    exponential_estimate<-summary(exponential_curve_fitted)$coefficients[2]
+    
+    #this model is a*e**bx
+    chenchun_kras_ddg_dt_subset_distance_subset[,allo_predicted:=coef(exponential_curve_fitted)[1]*exp(coef(exponential_curve_fitted)[2]*scHAmin_ligand)]
+    chenchun_kras_ddg_dt_subset_distance_subset[,coef_individual_curve_a:=coef(exponential_curve_fitted)[1]]
+    chenchun_kras_ddg_dt_subset_distance_subset[,coef_individual_curve_b:=coef(exponential_curve_fitted)[2]]
+    half_ddg<-max(abs(chenchun_kras_ddg_dt_subset_distance_subset$ddg))
+    a <- coef(exponential_curve_fitted)[1]
+    b <- coef(exponential_curve_fitted)[2]
+
+    half_ddg <- a / 2  # 50% reduction
+    half_d <- log(half_ddg / a) / b
+  
+    print(paste0("HALF DDG: ", half_ddg))
+    print(paste0("HALF d: ", half_d))
+    
+    chenchun_kras_ddg_dt_subset_distance_subset[,half_d:=half_d]
+    half_d_list[[c]]<-half_d
+    half_a[[c]]<-a
+    half_b[[c]]<-b
+    
+    c=c+1
+    
+    all_ddg_table_abs_allo_noBI<-rbind(all_ddg_table_abs_allo_noBI, chenchun_kras_ddg_dt_subset_distance_subset)
+}
+chenchun_allo_curves_table<-all_ddg_table_abs_allo_noBI
+```
+
+Summary of the KRAS d 1/2 values calculated
+```{r}
+summary(unlist(half_d_list))
+```
+
+
+```{r, fig.width=10, fig.height=2}
+# prepare half d labels
+half_d_dt<-data.table(half_d_list)
+half_d_dt$assay<-libraries_chenchun
+half_d_dt$a<-half_a
+half_d_dt$b<-half_b
+
+midpoints <- chenchun_allo_curves_table %>%
+  group_by(assay) %>%
+  summarise(midpoint_x = mean(range(scHAmin_ligand)))
+
+curve_coefficients <- half_d_dt %>%
+  left_join(midpoints, by = "assay")
+
+curve_coefficients[,half_d_list:=unlist(half_d_list)]
+curve_coefficients[,label_half_d:=paste0("d1/2 = ", round(half_d_list, 2), "Å")]
+
+curve_coefficients[, label_a:=paste0("a = ", round(as.numeric(a), 2))]
+curve_coefficients[, label_b:=paste0("b = ", round(as.numeric(b), 2))]
+
+ggplot(chenchun_allo_curves_table, aes(x=scHAmin_ligand, y=abs(ddg)))+
+  geom_point(alpha=0.5, size=0.5, aes(color=binding_interface_5A))+
+  scale_color_manual(values=c("grey40", "tomato"))+
+  theme_classic()+
+  new_scale_color()+
+  geom_line(aes(x=scHAmin_ligand, y=abs(allo_predicted)), color="black", size=1)+
+  facet_wrap(~assay, scale="free_x", nrow=1)+
+  theme()+
+  new_scale_color()+
+  theme(legend.position="none",
+        strip.text.x = element_text(size = 10, face = "bold"),
+        strip.background = element_rect(color="grey", fill="white", size=1.5, linetype="solid"
+     ))+
+  geom_text(data=curve_coefficients, aes(label=label_half_d, x=midpoint_x, y=3.2), color="black", font = "bold")+
+  geom_text(data=curve_coefficients, aes(label=label_a, x=midpoint_x, y=2.9), color="black", font = "bold")+
+  geom_text(data=curve_coefficients, aes(label=label_b, x=midpoint_x, y=2.6), color="black", font = "bold")+
+  ylab("|∆∆Gb|")+
+  xlab("distance to the effector (Å)")+
+  theme(axis.text.x=element_text(size=13,face="bold", color="black"), 
+        axis.text.y=element_text(size=13,face="bold", color="black"),
+        axis.title.y=element_text(size=13,face="bold", color="black"),
+        axis.title.x=element_text(size=13,face="bold", color="black"))
+
+ggsave(paste0("Figs/Fig4/FigS4Bdecay_curves_chenchun.png"), width=10, height=2.5)
+
+  
+```
+
+
+
+## Toni's SRC d1/2 value (Figure S4C)
+```{r}
+toni_src_ddg_dt<-as.data.table(fread(paste0("data/external_data/toni-SRC-ddgTables.txt")))
+toni_src_annotation<-as.data.table(fread(paste0("data/external_data/20220620_c-SRC_annotations.txt")))
+
+# Select key ddG columns
+toni_src_ddg_dt_subset<-toni_src_ddg_dt[, c("id", "FL_activity_mean_kcal/mol", "KD_activity_mean_kcal/mol")]
+
+# Extract numeric position from mutation ID and compute kinase numbering
+toni_src_ddg_dt_subset[, Pos_ref:=extract_numeric(id)]
+toni_src_ddg_dt_subset[, kinase_resno:=Pos_ref+267] # offset from construct to kinase
+toni_src_ddg_dt_subset[, pos_in_uniprot:=kinase_resno] 
+
+
+# Add ATP-binding site annotations
+ATP_active_site_pos<-unique(toni_src_annotation[smallMolecule_ion_substrate_binding=="ATP"]$position)
+toni_src_ddg_dt_subset[, ATP_binding:=kinase_resno %in% ATP_active_site_pos]
+
+# add Toni's distance-to-functional-site annotations
+distance_to_catD<-fread(paste0("data/external_data/2SRC.form.CAT.tab.pdb_pairwise_distances.txt"))
+distance_to_atp<-fread(paste0("data/external_data/2SRC.form.ligand.tab.pdb_pairwise_distances.txt"))
+distance_to_substrate<-fread(paste0("data/external_data/2SRC.form.SUBSTRATEp.tab.pdb_pairwise_distances.txt"))
+
+
+# ── Compute minimal distance per residue ──
+#calculate minimum distance of all atoms in each residue and map to uniprot aa positions
+mindistances_by_residue_to_catD<-data.table(aggregate(distance~kinase_resno,FUN=min,data=distance_to_catD[mol_elety %in% c("OD1","OD2"),]))
+colnames(mindistances_by_residue_to_catD)[2]<-"distance_catD"
+mindistances_by_residue_to_catD[,pos_in_uniprot:=kinase_resno+3]
+mindistances_by_residue_to_atp<-data.table(aggregate(distance~kinase_resno,FUN=min,data=distance_to_atp))
+colnames(mindistances_by_residue_to_atp)[2]<-"distance_ATP"
+mindistances_by_residue_to_atp[,pos_in_uniprot:=kinase_resno+3]
+mindistances_by_residue_to_substrate<-data.table(aggregate(distance~kinase_resno,FUN=min,data=distance_to_substrate[mol_elety %in% c("CG"),]))
+colnames(mindistances_by_residue_to_substrate)[2]<-"distance_sub"
+mindistances_by_residue_to_substrate[,pos_in_uniprot:=kinase_resno+3]
+
+
+# ──  Merge all distance annotations ── 
+toni_src_ddg_dt_subset[,pos_in_uniprot:=kinase_resno]
+toni_src_ddg_dt_subset_<-left_join(toni_src_ddg_dt_subset, mindistances_by_residue_to_substrate, by="pos_in_uniprot")
+toni_src_ddg_dt_subset_<-left_join(toni_src_ddg_dt_subset_, mindistances_by_residue_to_atp, by="pos_in_uniprot")
+toni_src_ddg_dt_subset_<-left_join(toni_src_ddg_dt_subset_, mindistances_by_residue_to_catD, by="pos_in_uniprot")
+
+# Compute the minimum of all distance types per position
+toni_src_ddg_dt_subset_[,mindistance:=pmin(distance_sub, distance_ATP, distance_catD)]
+
+# Rename ddG columns for clarity
+colnames(toni_src_ddg_dt_subset_)[c(2,3)]<-c("FL_ddg_activity", "KD_ddg_activity")
+
+```
+
+
+```{r fig.height=3, fig.width=3, warning=FALSE}
+# all mutations KD
+xvector_starting<-toni_src_ddg_dt_subset_[pos_in_uniprot<521 & !is.na(mindistance),]$mindistance
+yvector_starting<-abs(toni_src_ddg_dt_subset_[pos_in_uniprot<521 & !is.na(mindistance),]$KD_ddg_activity)
+
+# fitting the curve (without BI)
+model_2<-fit_exponential_curve(xvector=toni_src_ddg_dt_subset_[pos_in_uniprot<521 & !is.na(mindistance) & ATP_binding==F,]$mindistance,
+                      yvector=abs(toni_src_ddg_dt_subset_[pos_in_uniprot<521 & !is.na(mindistance) & ATP_binding==F,]$KD_ddg_activity),plotfig=F,
+                      tit="FigureS4a_allsites_allmutations")
+half_ddg <- coef(model_2)[1] / 2  # 50% reduction
+half_d <- log(half_ddg / coef(model_2)[1]) / coef(model_2)[2]
+print(half_d) #8.29
+
+
+# plot for toni's decay curve fitted excluding the binding interface
+toni_src_ddg_dt_subset_$predicted_ddg <- coef(model_2)[1] * exp(coef(model_2)[2] * toni_src_ddg_dt_subset_$mindistance)
+toni_src_ddg_dt_subset_[, library:="SRC kinase domain"]
+
+ggplot(toni_src_ddg_dt_subset_, aes(x=mindistance, y=abs(KD_ddg_activity), color=ATP_binding))+
+  geom_point(alpha=0.2, size=1)+
+  geom_point(data=toni_src_ddg_dt_subset_[ATP_binding==T], alpha=0.2, color="tomato")+
+  scale_color_manual(values=c("grey40", "tomato"))+
+  theme_classic()+
+  geom_line(aes(x=mindistance, y=predicted_ddg), color="black", size=1.5)+
+  geom_text(aes(x=max(toni_src_ddg_dt_subset_$mindistance, na.rm=T)/2, y=3.9, label=paste0("d 1/2 =", round(half_d, 3))), size=5, color="black")+facet_grid(~library)+
+  geom_text(aes(x=max(toni_src_ddg_dt_subset_$mindistance, na.rm=T)/2, y=3.5, label=paste0("a =", round(coef(model_2)[1], 2))), size=5, color="black")+
+  geom_text(aes(x=max(toni_src_ddg_dt_subset_$mindistance, na.rm=T)/2, y=3.1, label=paste0("b =", round(coef(model_2)[2], 2))), size=5, color="black")+
+  theme_classic()+
+  theme(legend.position="none",
+        strip.text.x = element_text(size = 13, face = "bold"),
+        strip.background = element_rect(color="grey", fill="white", size=1.5, linetype="solid"
+     ))+
+  ylab("|∆∆Ga|")+
+  xlab("distance to the\nactive site (Å)")+
+  theme(axis.text.x=element_text(size=13,face="bold", color="black"), 
+        axis.text.y=element_text(size=13,face="bold", color="black"),
+        axis.title.y=element_text(size=15,face="bold", color="black"),
+        axis.title.x=element_text(size=13,face="bold", color="black"))
+  
+ggsave(paste0("Figs/Fig4/FigS4Adecay_curves_toni.png"), width=2.8, height=3)
+```
+
+
+
+# correlation of residuals
+The ∆∆Gb-residuals for mutations outside of the binding interfaces are well correlated for the same PDZ domains binding to two different ligands (median Pearson’s r = 0.81) but are less conserved when comparing between two different PDZ domains (median r = 0.50, Extended Data Fig. 4d).
+```{r}
+all_allo_table[,mut:=substr(id, nchar(id), nchar(id))]
+all_allo_table_wide <- dcast(all_allo_table[binding_interface_contacts==F, .(structural_alignment_pos, mut, library, allo_decay_residual)], structural_alignment_pos + mut ~ library, value.var = "allo_decay_residual")
+
+# calculate all pairwise pearson correlations
+cor_matrix <- cor(all_allo_table_wide[,!c("structural_alignment_pos", "mut")], use = "pairwise.complete.obs", method="spearman")
+cor_matrix[upper.tri(cor_matrix)]<--1
+diag(cor_matrix)<-1
+print("Overall correlation summary")
+summary(as.vector((cor_matrix[cor_matrix!=-1 & cor_matrix!=1])))
+
+#annotate which types of comparisons are these
+cor_matrix_melted<-as.data.table(reshape2:::melt.matrix(cor_matrix))
+cor_matrix_melted[, value:=as.numeric(value)]
+cor_matrix_melted<-cor_matrix_melted[value!=-1 & value!=1]
+cor_matrix_melted[, same_pdz:=sub("^(([^_]+)_([^_]+))_.*", "\\1", Var1)==sub("^(([^_]+)_([^_]+))_.*", "\\1", Var2)]
+cor_matrix_melted[, same_lig:=sub("^[^_]+_[^_]+_", "", Var1)==sub("^[^_]+_[^_]+_", "", Var2)]
+cor_matrix_melted[,class2:=sub("^[^_]+_[^_]+_", "", Var1)=="cep164" | sub("^[^_]+_[^_]+_", "", Var2)=="cep164"]
+cor_matrix_melted[same_pdz==T, category_comparison:="same_pdz"]
+cor_matrix_melted[same_lig==T, category_comparison:="same_lig"]
+cor_matrix_melted[class2==T, category_comparison:="class2"]
+cor_matrix_melted[is.na(category_comparison), category_comparison:="unrelated"]
+
+print("Correlation summary SAME pdz")
+summary(cor_matrix_melted[category_comparison=="same_pdz"]$value)
+print("Correlation summary DIFFERENT pdz")
+summary(cor_matrix_melted[category_comparison!="same_pdz"]$value)
+```
+I will make a plot of that
+```{r}
+p<-ggplot(cor_matrix_melted, aes(x=factor(category_comparison, levels=c("same_pdz", "same_lig", "class2", "unrelated"),labels=c("same\npdz", "same\nligand","class1\nvs\nclass2", "not\nrelated")), y=value, color=category_comparison, fill=category_comparison))+
+  geom_boxplot(size=0.8, alpha=0.5)+
+  geom_point(color="black", position="jitter", size=1)+
+  scale_color_manual(values=c("#9EC6F3","#9B7EBD", "#B0DB9C" , "#DA6C6C"))+
+  scale_fill_manual(values=c("#9EC6F3","#9B7EBD", "#B0DB9C" , "#DA6C6C"))+
+  #scale_fill_manual(values=c("#64E2B7", "#DC8BE0", "#D50B8B", "#FF7601"))+
+  #scale_color_brewer(palette="Dark2")+
+  #scale_fill_brewer(palette="Dark2")+
+  ylim(c(0,1))+
+  theme_classic()+ylab("decay curve residuals\nPearson correlations")+
+  xlab("")+
+  theme(legend.position="none")+#+ylim(c(0,3))+
+theme(axis.text.x=element_text(size=13,face="bold", color="black"), 
+        axis.text.y=element_text(size=13,face="bold", color="black"),
+        axis.title.y=element_text(size=13,face="bold", color="black"),
+        axis.title.x=element_text(size=13,face="bold", color="black"))
+
+ggsave(paste0("Figs/Fig4/FigS4Dresidual_correlations.png"), width=3.4, height=3.4)
+```
+
+
+For each interaction, a median of 14.4% of mutations have effects larger than expected given the distance-dependent decay (one-sided Z-test for residual>0, FDR<0.1). 
+```{r}
+######## calculate the test ########
+allo_significant_mutations<-all_allo_table[binding_interface_contacts==F, .(Z_Score = (allo_decay_residual) / std_ddg, std_ddg=std_ddg, allo_decay_residual=allo_decay_residual), by=.(library, structural_alignment_pos, mut)]
+allo_significant_mutations[, P_Value := pnorm(-Z_Score)]  # one-sided test: Z > 0, pnorm(-Z_Score) means you are getting the upper-tail probability for positive Z-scores. This is a one-sided test looking at whether the Z_Score is significantly greater than 0.
+allo_significant_mutations$adjusted_p<-p.adjust(allo_significant_mutations$P_Value, method="fdr")
+
+
+######## select the ones that are significant ########
+allo_significant_mutations[, significant_residual:=adjusted_p<0.1 & allo_decay_residual>0]
+
+
+######## calculate the percentages of signficant mutations ########
+allo_significant_percentages<-allo_significant_mutations[, .(total_significant_residual=sum(significant_residual), total=.N), by=(library)]
+allo_significant_percentages[,percentage:=total_significant_residual/total]
+print(allo_significant_percentages$percentage)
+summary(allo_significant_percentages$percentage*100)
+
+```
+
+Across pairwise comparisons, only a median of 7.3% of these unusually strong allosteric mutations identified in one interaction are also classified as unexpectedly allosteric in a second PDZ domain. However, the overlap for the same PDZ domain binding different ligands is larger, increasing to a median of 41.4%
+```{r warning=FALSE}
+# I want to test the overall correlations but also the correlations of the allosteric sites
+# first correlations of allo decay residuals
+allo_significant_mutations[,.(library,structural_alignment_pos, mut, allo_decay_residual)]
+allo_significant_wide <- dcast(allo_significant_mutations[significant_residual==T], structural_alignment_pos + mut ~ library, value.var = "allo_decay_residual")
+# then correlations of ddG
+
+# Get only library columns
+lib_cols <- setdiff(names(allo_significant_wide), c("structural_alignment_pos", "mut"))
+
+# Initialize matrix to store overlap percentages
+overlap_matrix <- matrix(NA, nrow = length(lib_cols), ncol = length(lib_cols),
+                         dimnames = list(lib_cols, lib_cols))
+
+# Calculate pairwise overlaps
+for (i in seq_along(lib_cols)) {
+  for (j in seq_along(lib_cols)) {
+    col1 <- lib_cols[i]
+    col2 <- lib_cols[j]
+  
+      not_na1 <- !is.na(allo_significant_wide[[col1]])
+    not_na2 <- !is.na(allo_significant_wide[[col2]])
+    
+    both_not_na <- sum(not_na1 & not_na2)
+    either_not_na <- sum(not_na1 | not_na2)
+    
+    overlap_matrix[i, j] <- round(both_not_na / either_not_na, 3)  # percentage shared
+  }
+}
+
+overlap_matrix[upper.tri(overlap_matrix)]<--1
+summary(as.vector((overlap_matrix[overlap_matrix!=-1])))
+
+overlap_matrix_melted<-as.data.table(reshape2::melt(overlap_matrix))
+overlap_matrix_melted<-overlap_matrix_melted[value!=-1 & value!=1]
+overlap_matrix_melted[, same_pdz:=sub("^(([^_]+)_([^_]+))_.*", "\\1", Var1)==sub("^(([^_]+)_([^_]+))_.*", "\\1", Var2)]
+overlap_matrix_melted[, same_lig:=sub("^[^_]+_[^_]+_", "", Var1)==sub("^[^_]+_[^_]+_", "", Var2)]
+overlap_matrix_melted[,class2:=sub("^[^_]+_[^_]+_", "", Var1)=="cep164" | sub("^[^_]+_[^_]+_", "", Var2)=="cep164"]
+overlap_matrix_melted[same_pdz==T, category_comparison:="same_pdz"]
+overlap_matrix_melted[same_lig==T, category_comparison:="same_lig"]
+overlap_matrix_melted[class2==T, category_comparison:="class2"]
+overlap_matrix_melted[is.na(category_comparison), category_comparison:="unrelated"]
+
+ggplot(overlap_matrix_melted[Var1!=Var2], aes(x=factor(category_comparison, levels=c("same_pdz", "same_lig", "class2", "unrelated"),labels=c("same\npdz", "same\nligand","class1\nvs\nclass2", "not\nrelated")), y=value, color=category_comparison, fill=category_comparison))+
+  geom_boxplot(alpha=0.5, size=1)+
+  geom_point(color="black", position="jitter", size=1)+
+  scale_color_manual(values=c("#9EC6F3","#9B7EBD", "#B0DB9C" , "#DA6C6C"))+
+  scale_fill_manual(values=c("#9EC6F3","#9B7EBD", "#B0DB9C" , "#DA6C6C"))+
+  #scale_color_manual(values=c("#64E2B7", "#DC8BE0", "#D50B8B", "#FF7601"))+
+  #scale_fill_manual(values=c("#64E2B7", "#DC8BE0", "#D50B8B", "#FF7601"))+
+  ylab("%allosteric mutations\noverlap")+
+  theme_classic()+
+  theme(legend.position="none", axis.title.x=element_blank())+ylim(c(0,1))+#+ylim(c(0,3))+
+theme(axis.text.x=element_text(size=13,face="bold", color="black"), 
+        axis.text.y=element_text(size=13,face="bold", color="black"),
+        axis.title.y=element_text(size=13,face="bold", color="black"))
+
+ggsave(paste0("Figs/Fig4/FigS4Eoverlap_allo_mut_percentages.png"), width=3.4, height=3.4)
+
+summary(overlap_matrix_melted[same_pdz==T]$value)
+summary(overlap_matrix_melted[same_pdz!=T]$value)
+```
+
+
+# Define allosteric hotspots
+We define allosteric hotspots as positions where mutations cause larger changes in ∆∆Gb than expected at their distance from the ligand (FDR<0.05, one-sided t-test; median |∆∆Gb| > 0.2kcal/mol) (see methods, Fig. 4d,f and Extended Data fig. 4f). 
+```{r}
+all_allo_table_define_hotspots<-all_allo_table
+
+# positions where median |ddG| is higher than a threshold
+ddG_threshold<-0.2
+allo_hotspots_candidates<-all_allo_table_define_hotspots[,.(median_ddg=median(abs(ddg))), by=.(library, structural_alignment_pos)][, candidate_ddg:=median_ddg>ddG_threshold]
+
+# Get which position's residual distributions are statistically >> 0
+residual_distributions_test_results <- all_allo_table_define_hotspots[
+  !is.na(allo_decay_residual),  # Ensure allo_decay_residual is not NA
+  .(
+    p_value = if (.N > 1 && length(unique(allo_decay_residual)) > 1) {
+      t.test(allo_decay_residual, mu = 0, alternative = "greater")$p.value
+    } else {
+      NA_real_  # Use numeric NA for consistency
+    }
+  ),
+  by = .(library, structural_alignment_pos)
+]
+residual_distributions_test_results[, p_adjusted := p.adjust(p_value, method = "fdr")]
+residual_distributions_test_results[,significant_residual_distribution:=p_adjusted<0.05]
+
+### join both filters and define hotspots
+test_results_complete<-left_join(residual_distributions_test_results, allo_hotspots_candidates)
+significant_distributions<-test_results_complete[candidate_ddg==T & significant_residual_distribution==T]
+
+test_results_complete[, allo_hotspot:= candidate_ddg==T & significant_residual_distribution==T]
+test_results_complete<-left_join(all_allo_table[binding_interface_contacts==F], test_results_complete)
+
+# define which are the conserved hotspots
+conserved_hotspots<-test_results_complete[allo_hotspot==T, .N, by = .(structural_alignment_pos, pdz)][, .N, by = .(structural_alignment_pos)][N>=3]
+
+allo_hotspots_dt<-test_results_complete
+```
+
+## store the results in the supplemmentary table
+```{r}
+Supplementary_table6<-fread(paste0("supplementary_tables/Supplementary_table6_BI.txt"))
+
+colnames(Supplementary_table6)[1]<-"library_name"
+
+allo_hotspots_dt_<-allo_hotspots_dt[, .(median_ddg=median(ddg), median_abs_ddg=median(abs(ddg)), mean_ddg=mean(ddg), rsasa=rsasa[1], p_value=p_value[1], p_adjusted=p_adjusted[1], allo_hotspot=allo_hotspot[1]), by=.(library_name, structural_alignment_pos, Uniprot_pos_ref.x)]
+
+allo_hotspots_dt_$ALLO_hotspot_class<-"non-Hotspot"
+
+allo_hotspots_dt_[structural_alignment_pos %in% conserved_hotspots$structural_alignment_pos & allo_hotspot==T, ALLO_hotspot_class:="Hotspot in >2/5 PDZs"]
+
+allo_hotspots_dt_[!structural_alignment_pos %in% conserved_hotspots$structural_alignment_pos & allo_hotspot==T, ALLO_hotspot_class:="Hotspot"]
+
+allo_hotspots_dt_[,class:="allostery (outside BI)"]
+colnames(allo_hotspots_dt_)[3]<-"Uniprot_pos_ref"
+
+complete_hotspots_table<-merge(allo_hotspots_dt_, Supplementary_table6, by=c("library_name", "structural_alignment_pos", "Uniprot_pos_ref", "median_ddg", "mean_ddg", "rsasa", "p_value", "p_adjusted", "class"), all = T)
+
+fwrite(complete_hotspots_table, paste0("supplementary_tables/Supplementary_table6.txt"))
+```
+
+
+
+## boxplot distributions of residuals
+```{r, fig.width=10, fig.height=10}
+ggplot(test_results_complete)+
+  #geom_hline(aes(yintercept = median(plot_dt$allo_decay_residual,na.rm = T)), color="brown")+
+  geom_hline(aes(yintercept = 0), color="grey")+
+  geom_boxplot(aes(x=factor(structural_alignment_pos), y=allo_decay_residual, fill=library, color=allo_hotspot))+
+  theme_pubr()+
+  scale_fill_brewer(palette="Set2")+
+  scale_color_manual("fdr.adjusted<0.1", values=c("grey80", "black"))+
+  facet_wrap(~structural_alignment_pos, scales="free_x", nrow=5)+
+  geom_point(data=test_results_complete[structural_alignment_pos %in% conserved_hotspots$structural_alignment_pos,], aes(x=1, y=2), shape=23, size=3.5, fill="#886ac4")+xlab("")+ylab("decay curve residual")+ylim(c(-1.1,2.2))+
+  theme(legend.position="right", axis.text.x = element_blank(), axis.ticks.x = element_blank())
+
+```
+
+```{r}
+structure_colors <- c(
+  "helix" = "#ffcccc",   # light red
+  "sheet" = "#ccccff",  # light green
+  "loop" = "white"     # light blue
+)
+
+# annotate the conserved hotspots vs non conserved
+test_results_complete[structural_alignment_pos %in% conserved_hotspots$structural_alignment_pos & allo_hotspot==T, hotspot_class:="hotspot in >2 PDZs"]
+test_results_complete[!structural_alignment_pos %in% conserved_hotspots$structural_alignment_pos & allo_hotspot==T, hotspot_class:="hotspot in 1 or 2 PDZs"]
+test_results_complete[allo_hotspot==F, hotspot_class:="not Hotspot"]
+
+
+test_results_complete$library<-lib_code_to_name(test_results_complete$library, libraries, libraries_names)
+test_results_complete<-left_join(test_results_complete, all_ddg_table[,.(library,structural_alignment_pos,ddg)][, ddg_not_abs:=ddg][,-c("ddg")])
+test_results_complete_median<-left_join(test_results_complete[,-c("median_ddg")], all_median_ddg_table[!is.na(scHAmin_ligand),.(library,structural_alignment_pos,median_ddg)])
+
+test_results_complete_median[median_ddg<0, allo_predicted:=-allo_predicted]
+
+# library names for the plots
+test_results_complete_median$library_name<-gsub("_", "-", gsub(" binding ", " | ", (unlist(lapply(test_results_complete_median$library, lib_code_to_name, libraries_names, libraries_names_plots)))))
+
+pdb_metrics_dt$library_name<-gsub("_", "-", gsub(" binding ", " | ", (unlist(lapply(pdb_metrics_dt$library, lib_code_to_name, libraries_names, libraries_names_plots)))))
+
+BI_hotspots_dt$library_name<-gsub("\n", " | ", BI_hotspots_dt$lib_name)
+
+
+p<-ggplot(test_results_complete_median[binding_interface_contacts==F], aes(x=factor(structural_alignment_pos), y=ddg))+
+  geom_tile(data=pdb_metrics_dt[!is.na(scHAmin_ligand)], aes(y = 2, fill = secondary_structure), 
+            height = Inf) +
+  geom_boxplot(aes(color=hotspot_class, group=structural_alignment_pos), outliers=F)+
+  scale_fill_manual(values = structure_colors) +#, guide = "none") +
+  
+  geom_boxplot(data=BI_hotspots_dt, aes(x=structural_alignment_pos, y=ddg, color=hotspot_class, group=structural_alignment_pos), outliers=F, color="tomato")+
+  scale_fill_manual(values = structure_colors) +
+  
+  geom_point(aes(x=factor(structural_alignment_pos), y=allo_predicted), color="blue", size=0.5)+
+  scale_color_manual(values=c("black", "green3", "grey"))+
+  
+  theme_classic()+
+  facet_wrap(~library_name, ncol=1)+
+  #geom_hline(aes(yintercept = ddG_threshold), color="grey50")+#, linetype="dashed")+
+  geom_hline(aes(yintercept = 0), color="grey50")+
+  scale_x_discrete(breaks=seq(5,129,by=5))+
+  theme(legend.position="none",
+        strip.text.x = element_text(size = 10, face = "bold"),
+        strip.background = element_rect(color="grey", fill="white", size=1.5, linetype="solid"
+     ))+ylab("|∆∆Gb|")+xlab("Structural alignment position")+
+  theme(axis.text.x=element_text(size=13, color="black"), 
+        axis.text.y=element_text(size=13, color="black"),
+        axis.title.y=element_text(size=13,color="black"),
+        axis.title.x=element_text(size=13, color="black"))
+
+ggsave(paste0("Figs/Fig4/FigS4Fboxplots_all.png"), width=13, height=9)
+
+```
+
+A small figure to help explain how we classified the hotspots
+```{r}
+ggplot(all_allo_table[library=="psd95_pdz2_cript"], aes(x=scHAmin_ligand, y=ddg))+
+  geom_point(alpha=0.2, size=0.7, aes(color=binding_interface_contacts))+
+  scale_color_manual(values=c("grey70", "tomato"))+
+  new_scale_color()+
+  geom_line(aes(x=scHAmin_ligand, y=allo_predicted), color="black", size=1.5)+
+  scale_color_brewer(palette="Set2")+
+  geom_boxplot(data=all_allo_table[library=="psd95_pdz2_cript" & structural_alignment_pos %in% c(57, 64)], size=0.7, aes(group=structural_alignment_pos), width=0.7, color="black")+
+  facet_grid(~library_name, scale="free_x")+
+  facet_grid2(~library_name, strip = strip_themed(
+    text_x = elem_list_text(face = "bold", colour = "black")), scale="free_x") +
+  theme_classic()+
+  theme(legend.position="none",
+        strip.text.x = element_text(size = 9, face = "bold"),
+        strip.background = element_rect(color="grey", fill="white", size=1.5, linetype="solid"
+     ))+
+  #geom_text(data=curve_coefficients[library=="762_808"], aes(label=label_half_d, x=midpoint_x, y=3), color="black", font = "bold")+
+  ylab("|∆∆Gb|")+
+  xlab("distance to the ligand (Å)")+
+  theme(axis.text.x=element_text(size=10,face="bold", color="black"), 
+        axis.text.y=element_text(size=10,face="bold", color="black"),
+        axis.title.y=element_text(size=10,face="bold", color="black"),
+        axis.title.x=element_text(size=10,face="bold", color="black"))
+
+ggsave(paste0("Figs/Fig4/Fig4Ddecay_dstributions_examples.png"), width=2.1, height=2)
+
+ggplot(test_results_complete[structural_alignment_pos %in% c(57, 64)])+
+  #geom_hline(aes(yintercept = median(plot_dt$allo_decay_residual,na.rm = T)), color="brown")+
+  geom_hline(aes(yintercept = 0), color="grey")+
+  geom_boxplot(aes(x=factor(structural_alignment_pos), y=allo_decay_residual, fill=library, color=allo_hotspot))+
+  theme_pubr()+
+  scale_fill_brewer(palette="Set2")+
+  scale_color_manual("fdr.adjusted<0.1", values=c("grey80", "black"))+
+  facet_wrap(~structural_alignment_pos, scales="free_x", nrow=1)+
+  theme(legend.position="none")+
+  xlab("")+
+  ylab("distance decay\n|∆∆Gb| resiudal")+
+  theme(legend.position="none",
+        axis.text.x=element_blank(),
+        axis.ticks.x = element_blank(),
+        axis.title.x = element_blank(),
+        strip.text.x = element_text(size = 10, face = "bold"),
+        strip.background = element_rect(color="grey", fill="white", size=1.5, linetype="solid"
+     ))+
+  theme(#axis.text.x=element_text(size=10,face="bold", color="black"), 
+        axis.text.y=element_text(size=10,face="bold", color="black"),
+        axis.title.y=element_text(size=10,face="bold", color="black"),
+        axis.title.x=element_text(size=10,face="bold", color="black"))
+
+ggsave(paste0("Figs/Fig4/Fig4Ddecay_dstributions_examples2.png"), width=2.1, height=2.2)
+
+```
+
+# effects of hotspots are comparable to those in the binding intreface
+For each interaction, this defines a median of 19.6% of the positions outside the binding interface as allosteric hotspots (range 17.4% to 24.7%). Mutations in these allosteric hotspots cause changes in binding energy comparable in magnitude to mutations in the binding interface (Fig. 4g and Extended Data Fig. 4g). 
+
+```{r warning=FALSE}
+# define which are the conserved allosteric hotspots
+allo_hotspots_dt[, allo_consv_hotspot:=structural_alignment_pos %in% conserved_hotspots$structural_alignment_pos & allo_hotspot==T]
+
+# complete the ddG data with this hotspots definition
+allo_hotspots_dt$library<-lib_code_to_name(allo_hotspots_dt$library, libraries, libraries_names)
+all_ddg_table_allo<-left_join(all_ddg_table[assay=="binding"], allo_hotspots_dt[,c("library","structural_alignment_pos", "allo_hotspot", "allo_consv_hotspot")])
+
+all_ddg_table_allo[is.na(allo_consv_hotspot), allo_consv_hotspot:=F]
+all_ddg_table_allo[is.na(allo_hotspot), allo_hotspot:=F]
+all_ddg_table_allo[, class:=as.integer(allo_hotspot)]
+all_ddg_table_allo[allo_consv_hotspot==T, class:=2]
+levels(all_ddg_table_allo$class)<-as.character(c(0,1,2,3,4))
+all_ddg_table_allo[, BI_hotspot:=structural_alignment_pos %in% BI_hotspots]
+all_ddg_table_allo[BI_hotspot==T, class:=3]
+all_ddg_table_allo[BI_hotspot==F & binding_interface_contacts==T,]$class<-"4"
+all_ddg_table_allo$class<-as.factor(all_ddg_table_allo$class)
+
+labels_plot<-c("Not Hotspot", "Allosteric\nHotspot\nin 1 or 2 PDZs", "Allosteric\nHotspot\nin >2/5 PDZs","BI\nconserved\nhotspots", "BI\nnon-hotspot")
+
+p<-ggplot(all_ddg_table_allo,aes(x=factor(class, levels=c(0,1,2,3,4), labels=labels_plot), y=ddg, fill=factor(class, levels=c(0,1,2,3,4), labels=labels_plot), color=factor(class, levels=c(0,1,2,3,4))))+
+  geom_hline(aes(yintercept=0), color="grey", linetype="dashed")+
+  geom_violin(scale="width")+
+  geom_boxplot(width=0.1, fill="white", color="black", outliers=F)+
+  scale_fill_manual("",values=c( "grey", "#64dd17", "#886ac4", "#FF7013", "gold"))+
+  scale_color_manual("",values=c("grey", "#64dd17", "#886ac4", "#FF7013", "gold"))+
+  stat_compare_means(comparisons=list(c("Allosteric\nHotspot\nin 1 or 2 PDZs", "Allosteric\nHotspot\nin >2/5 PDZs"),c("Allosteric\nHotspot\nin >2/5 PDZs","BI\nconserved\nhotspots"), c("Allosteric\nHotspot\nin >2/5 PDZs", "BI\nnon-hotspot"), c("Allosteric\nHotspot\nin 1 or 2 PDZs", "BI\nnon-hotspot")),aes(label=after_stat(p.signif)), size=5)+
+  theme_classic()+
+  ylim(c(-2,5.5))+
+  xlab("Conserved hotspot")+
+  ylab("∆∆Gb")+
+  theme(legend.position = "none",
+        axis.title.x=element_blank(),
+        axis.text.x=element_blank(),
+        axis.ticks.x=element_blank()#element_text(size=8),
+        )+
+  theme(axis.text.y=element_text(size=13,face="bold", color="black"),
+        axis.title.y=element_text(size=13,face="bold", color="black"))
+
+ggsave(paste0("Figs/Fig4/Fig4Ghotspots_distributions.png"), width=4.3, height=3)
+```
+
+
+same figure but separated per library
+```{r warning=FALSE}
+labels_plot<-c("Other\nresidues", "Allostery\nvariable\nhotspots", "Allostery\nconserved\nhotspots"," BI\nconserved\nhotspots", "Other\nBI\ncontacts")
+
+all_ddg_table_allo$library_name<-gsub("_", "-", gsub(" binding ", " | ", (unlist(lapply(all_ddg_table_allo$library, lib_code_to_name, libraries, libraries_names)))))
+
+
+ggplot(all_ddg_table_allo,aes(x=factor(class, levels=c(0,1,2,3,4), labels=labels_plot), y=ddg, fill=factor(class, levels=c(0,1,2,3,4), labels=labels_plot), color=factor(class, levels=c(0,1,2,3,4))))+
+  geom_hline(aes(yintercept=0), color="grey", linetype="dashed")+
+  geom_violin(scale="width")+
+  geom_boxplot(width=0.2, fill="white", color="black", outliers=F)+
+  scale_fill_manual("",values=c( "grey", "#64dd17", "#886ac4", "#FF7013", "gold"))+
+  scale_color_manual("",values=c("grey", "#64dd17", "#886ac4", "#FF7013", "gold"))+
+  stat_compare_means(comparisons=list(c("Allostery\nvariable\nhotspots", "Allostery\nconserved\nhotspots"),c("Allostery\nconserved\nhotspots"," BI\nconserved\nhotspots"), c("Allostery\nconserved\nhotspots", "Other\nBI\ncontacts"), c("Allostery\nvariable\nhotspots", "Other\nBI\ncontacts")),aes(label=after_stat(p.signif)), size=5)+
+  theme_classic()+
+  ylim(c(-1.7,5.5))+
+  xlab("Conserved hotspot")+
+  ylab("∆∆Gb")+
+  theme(legend.position = "none",
+        axis.title.x=element_blank(),
+        axis.text.x=element_blank(),
+        axis.ticks.x=element_blank(),
+        )+
+  facet_grid2(~library_name, strip = strip_themed(
+    text_x = elem_list_text(face = "bold", colour = facet_colors)), scale="free_x") +
+  theme(legend.position="none",
+        strip.text.x = element_text(size = 8, face = "bold"),
+        strip.background = element_rect(color="grey", fill="white", size=1.5, linetype="solid"
+     ))
+ggsave(paste0("Figs/Fig4/FigS4Ghotspots_distributions_per_lib.png"), width=12, height=3)
+
+```
+
+
+
+
+
+## how many hotspots per interaction
+For each interaction, this defines a median of 19.6% of the positions outside the binding interface as allosteric hotspots (range 17.4% to 24.7%). 
+```{r}
+percentage_allo_sites<-allo_hotspots_dt[,.(allo_hotspot=allo_hotspot[1]) ,by=.(structural_alignment_pos, library)][, .(allo_sites=sum(allo_hotspot), total=.N), by=.(library)]
+
+percentage_allo_sites[,percentage:=allo_sites/total]
+summary(percentage_allo_sites$percentage*100)
+```
+
+Across the five proteins, 43 different positions are allosteric hotspots for at least one interaction while 78 positions are not hotspots for any interaction (Fig. 4e).
+```{r}
+allo_color_palette<-c( "grey", "#64dd17", "#886ac4", "#FF7013", "gold")
+hotspots_count<-allo_hotspots_dt[allo_hotspot==T, .N, by = .(structural_alignment_pos, pdz)][, .N, by = .(structural_alignment_pos)]
+
+pdb_metrics_dt[is.na(binding_interface_contacts), binding_interface_contacts:=F]
+no_hotspot_counts_dt<-data.table(structural_alignment_pos=unique(pdb_metrics_dt[!is.na(scHAmin_ligand) & !structural_alignment_pos %in% hotspots_count$structural_alignment_pos & binding_interface_contacts==F]$structural_alignment_pos))
+
+no_hotspot_counts_dt[,N:=0]
+hotspots_count<-rbind(hotspots_count, no_hotspot_counts_dt)
+
+ggplot(hotspots_count, aes(x=factor(N), fill=factor(N)))+
+  geom_bar()+
+  scale_fill_manual(values=c("grey", "#64dd17", "#64dd17", "#886ac4", "#886ac4", "#886ac4"))+
+  scale_x_discrete(breaks=c(0,1,2,3,4,5))+
+  theme_classic()+
+  theme(legend.position="none")+
+  xlab("#PDZs with hotspot")+
+  geom_text(
+        stat = "count",
+        aes(
+            label = after_stat(count)
+        ),
+        position = position_dodge(),
+        color = "black",
+        size = 5,
+        vjust = -0.2
+    )+ylim(c(0, 86+12))+
+  theme(axis.text.x=element_text(size=13,face="bold"), 
+        axis.text.y=element_text(size=13,face="bold"),
+        axis.title.y=element_text(size=13,face="bold"),
+        axis.title.x=element_text(size=13,face="bold"))
+
+ggsave(paste0("Figs/Fig4/Fig4Ehotspots_per_pdz.png"), width=7, height=2.5)
+```
+
+
+How many are hotspots in all interactions
+```{r}
+hotspots_count[N==5]
+```
+
+
+One position (A57 in α1 helix) is an allosteric hotspot in all seven PDZ domain interactions tested (Fig. 4e,h & Extended Data fig. 4f). Position A57 contacts the carboxylate-binding loop in all interactions and was previously reported as allosteric in PTP-BL-PDZ2 (A46) and PSD95-PDZ3 (A347). 
+```{r}
+for(lib in libraries_binding_names){
+  carboxylate_b_loop<-c(24,25,26)
+  target<-57
+  carboxylate_b_loop_pos<-pdb_metrics_dt[library==lib & structural_alignment_pos %in% carboxylate_b_loop]$Pos
+  target_pos<-pdb_metrics_dt[library==lib & structural_alignment_pos==target]$Pos
+  print(lib)
+  print(nrow(get_contacts_dt[Pos_1 %in% target_pos & Pos_2 %in% carboxylate_b_loop_pos])>0)
+}
+```
+
+# Alignment of PDZs coloured by hotspots
+
+```{r}
+plot_alignment_dt<-left_join(all_median_ddg_table[assay=="binding"], allo_hotspots_dt[,.(allo_hotspot=allo_hotspot[1]), by=.(structural_alignment_pos, library)])
+
+plot_alignment_dt[,pdz:=as.integer(pdz)]
+plot_alignment_dt[, allo_consv_hotspot:=structural_alignment_pos %in% conserved_hotspots$structural_alignment_pos]
+
+plot_alignment_dt$library_name<-gsub("_", "-", gsub(" binding ", " | ", (unlist(lapply(plot_alignment_dt$library, lib_code_to_name, libraries_names, libraries_names_plots)))))
+
+# Annotate the most common secondary structure per position to annotate that.
+most_common_structure <- plot_alignment_dt[, .N, by = .(structural_alignment_pos, secondary_structure)][
+  order(-N), .SD[1], by = structural_alignment_pos]
+most_common_structure[, library_name := "Average\nstructure"]
+
+library(ggpattern)
+
+structure_colors <- c(
+  "helix" = "#ffcccc",   # light red
+  "sheet" = "#ccccff",  # light green
+  "loop" = "white"     # light blue
+)
+
+p<-ggplot(plot_alignment_dt, aes(x = factor(structural_alignment_pos), y = library_name, fill = median_ddg, label=WT_aa)) +
+  geom_tile()+
+  geom_tile(data=plot_alignment_dt[allo_consv_hotspot==T & allo_hotspot==T,], fill="transparent", color="#886ac4", size=1.5)+
+  geom_tile(data=plot_alignment_dt[allo_hotspot==T & allo_consv_hotspot==F,], fill="transparent", color="#64dd17", size=1)+
+  geom_tile_pattern(data=plot_alignment_dt[assay=="binding" & binding_interface_contacts==T],
+    aes(pattern = value > 0),  # Dashed pattern based on a condition
+    pattern = "stripe",        # Use stripe pattern
+    pattern_density = 0.5,     # Adjust stripe density
+    pattern_angle = 45,        # Adjust stripe angle
+    pattern_fill = "black",    # Stripe color
+    pattern_spacing = 0.03     # Adjust stripe spacing
+  ) +
+  scale_fill_gradient2(low = "#886ac4", mid = "white", high = "red", midpoint = 0) +
+  theme_classic() +
+  scale_x_discrete(limits=c(1:129), breaks=seq(5,129,5))+
+  labs(x = "Structural alignment position", y = "", fill="median ∆∆Gb")+
+  geom_text()+
+  new_scale("fill")+
+  geom_tile(data=most_common_structure, aes(x=structural_alignment_pos, y=library_name, fill=secondary_structure), inherit.aes = F, show.legend = FALSE)+
+  scale_fill_manual(values=structure_colors, name = "secondary\nstructure")+
+  theme(axis.text.x=element_text(size=13,face="bold", color="black"), 
+        axis.text.y=element_text(size=13,face="bold", color="black"),
+        axis.title.y=element_text(size=13,face="bold", color="black"),
+        axis.title.x=element_text(size=13,face="bold", color="black"))
+
+ggsave(paste0("Figs/Fig4/Fig4Fheatmap_allo_hotspots.png"), , width=20, height=3.5)
+```
+
+
+
+
+# Hotspots are enriched in b strands and depleted in loops
+The hotspots are enriched in β-strands (OR=2.90, P=1.01x10-06, two-sided FET) and depleted in loops (OR=0.49, P=5.88x10-04, Fig 4i)
+
+```{r}
+# calculate the average secondary structure per position to annotate in the figures
+most_common_value <- function(x) {
+  names(sort(table(x), decreasing = TRUE))[1]
+}
+
+secondary_structure<-pdb_metrics_dt[!is.na(scHAmin_ligand),.(secondary_structure=most_common_value(secondary_structure)), by=.(structural_alignment_pos)]
+
+# Order by library and structural position
+allo_hotspots_dt_short<-allo_hotspots_dt[,.(allo_hotspot=allo_hotspot[1]), by=.(library, structural_alignment_pos, secondary_structure)]
+
+# Function to compute enrichment
+compute_enrichment <- function(dt) {
+  result_list <- list()
+    
+    for (sec in unique(dt$secondary_structure)) {
+      in_block <- dt[secondary_structure == sec]
+      out_block <- dt[secondary_structure != sec]
+      
+      # Construct contingency table
+      mat <- matrix(
+        c(sum(in_block$allo_hotspot),
+          sum(!in_block$allo_hotspot),
+          sum(out_block$allo_hotspot),
+          sum(!out_block$allo_hotspot)),
+        nrow = 2,
+        byrow = TRUE
+      )
+      
+      fisher_res <- fisher.test(mat)
+      
+      result_list[[paste(lib, sec, sep = "_")]] <- data.table(
+        secondary_structure = sec,
+        odds_ratio = fisher_res$estimate,
+        p_value = fisher_res$p.value
+      )
+    }
+  
+  rbindlist(result_list)
+}
+
+enrichment_results <- compute_enrichment(allo_hotspots_dt_short)
+enrichment_results[,p_fdr_adj:=adjust_pvalue(p_value, method = "fdr")]
+
+ggplot(enrichment_results)+geom_bar(aes(x=factor(secondary_structure, labels=c("α helix", "loop", "β strand")), y=log2(odds_ratio), alpha=p_value<0.05), stat="identity", position="dodge")+theme_classic()+scale_alpha_manual(values=c(0.3, 1))+
+  scale_fill_brewer(palette="Set2")+
+  theme(axis.title.x=element_blank(),
+        axis.text.y=element_text(size=13),
+        axis.title.y=element_text(size=15),
+        axis.text.x=element_text(size=13, angle=90, vjust=0.5, hjust=1),
+        legend.text = element_text(size=7))+ylab("log2(OR)")+
+  labs(fill = "")+
+  theme(axis.text.x=element_text(size=13,face="bold", color="black"), 
+        axis.text.y=element_text(size=13,face="bold", color="black"),
+        axis.title.y=element_text(size=13,face="bold", color="black"))
+
+ggsave(paste0("Figs/Fig4/Fig4I_enrichment_structures.png"), width=2.5, height=3)
+
+enrichment_results_loop_beta_helix<-enrichment_results
+```
+```{r}
+enrichment_results
+```
+
+
+# Enrichment of hotspots in previous studies (PDZ3)
+The allosteric hotspots for PSD95-PDZ3 strongly overlap with residues reported and predicted as allosteric in previous experimental and computational studies (Extended Data Fig. 4h). 
+
+```{r}
+PDZ3_annotations_Andre_file<-paste0("data/external_data/Andre-PSD95-PDZ3_annotations.txt")
+PDZ3_annotations_Andre<-as.data.table(fread(PDZ3_annotations_Andre_file))
+PDZ3_annotations_Andre[,Pos:=Pos_ref-min(Pos_ref)+1]
+
+#previous annotation of 
+PDZ3_annotations_Andre[3][is.na(PDZ3_annotations_Andre[3])]<-0
+PDZ3_allo_sites_SCA_Mclaughlin2012<-PDZ3_annotations_Andre$Pos[as.logical(unlist(PDZ3_annotations_Andre[,3]))]
+PDZ3_allo_sites_SCA_Mclaughlin2012<-PDZ3_allo_sites_SCA_Mclaughlin2012[!is.na(PDZ3_allo_sites_SCA_Mclaughlin2012)]
+```
+
+**Extended Data Figure 4h**:Enrichment test for identified hotspots defined by previously reported allosteric networks in PSD95-PDZ3. Bars represent the most significant result out of four one-sided Fisher’s exact tests conducted per dataset. Tests include: enrichment of hotspots identified in PSD95-PDZ3 binding CRIPT, excluding this interaction’s binding interface residues (blue); enrichment of conserved hotspots (i.e., those identified in at least three PDZ domains in this study), excluding PSD95-PDZ3 binding interface residues (green); enrichment of hotspots identified in PSD95-PDZ3 binding CRIPT, including binding interface residues and hotspots (orange); and enrichment of the most conserved hotspots, including binding interface residues (purple). 
+
+```{r}
+# prepare data
+PDZ3_annotations_Andre[,Pos:=Pos_ref-311+1]# my PDZ3 starts at pos 311
+PDZ3_annotations_Andre<-PDZ3_annotations_Andre[Pos>0]
+PDZ3_annotations_Andre<-left_join(PDZ3_annotations_Andre, aln_table[pdz_name=="DLG4_PDZ3", .(Pos, structural_alignment_pos)])
+
+#get the table of my hotspots (all hotspots for PDZ3)
+allo_hotspots_dt_761<-allo_hotspots_dt[library=="psd95_pdz3_cript",.(allo_hotspot=allo_hotspot[1]), by=.(library, Pos, structural_alignment_pos)]
+
+#get the table of my hotspots (all hotspots for PDZ3) -> BI
+allo_hotspots_dt_761_BI<-BI_hotspots_dt[library=="psd95_pdz3_cript",.(bi_hotspot=significant[1]), by=.(library, Pos, structural_alignment_pos)]
+
+#merge both tables to have BI and ALLO hotspots
+hotspots_dt_761<-merge(allo_hotspots_dt_761, allo_hotspots_dt_761_BI, all=T)
+hotspots_dt_761[, hotspot:=allo_hotspot==T | bi_hotspot==T]
+hotspots_dt_761[is.na(hotspot), hotspot:=F]
+hotspots_dt_761[is.na(allo_hotspot), allo_hotspot:=F]
+hotspots_dt_761[is.na(bi_hotspot), bi_hotspot:=F]
+
+#get the table of my hotspots (CONSERVED hotspots coordinates for PDZ3)
+consv_allo_hotspots_dt_pos<-unique(allo_hotspots_dt[allo_consv_hotspot==T]$structural_alignment_pos)
+hotspots_dt_761[, allo_consv_hotspot:=structural_alignment_pos %in% consv_allo_hotspots_dt_pos]
+
+# get the table of the BI conserved hotspots
+consv_bi_hotspots_dt_pos<-unique(BI_hotspots_dt[BI_consv_hotspot==T]$structural_alignment_pos)
+hotspots_dt_761[, bi_consv_hotspot:=structural_alignment_pos %in% consv_bi_hotspots_dt_pos]
+
+#annotate if conserved hotspots (any BI or ALLO)
+hotspots_dt_761[, consv_hotspot:=allo_consv_hotspot==T | bi_consv_hotspot==T]
+
+
+# table where I will store the enrichment results
+#enrichments<-data.table(study=colnames(PDZ3_annotations_Andre)[c(2:11)])
+enrichments<-data.table()
+
+# get the positions of the binding intreface in 761_808
+bi_761<-all_median_ddg_table[binding_interface_contacts==T & library=="psd95_pdz3_cript"]$structural_alignment_pos
+hotspots_dt_761[, BI_761:=structural_alignment_pos %in% bi_761]
+
+
+for(study in colnames(PDZ3_annotations_Andre)[c(2:11)]){
+  print(study)
+  
+  # get hotspot residues from the study
+  significant_in_study_w_bi_list<-PDZ3_annotations_Andre[get(study)==1,]$structural_alignment_pos
+  n_1=length(significant_in_study_w_bi_list)
+  
+  # remove the binding intreface residues
+  significant_in_study_no_bi_list<-significant_in_study_w_bi_list[!significant_in_study_w_bi_list %in% bi_761]
+  n_2=length(significant_in_study_no_bi_list)
+  
+  # annotate hotspots in the study with no BI
+  
+  hotspots_dt_761[, significant_in_study_w_bi:=structural_alignment_pos %in% significant_in_study_w_bi_list]
+  hotspots_dt_761[, significant_in_study_no_bi:=structural_alignment_pos %in% significant_in_study_no_bi_list]
+  
+  
+  #1. enrichment only allo for PDZ3
+  conf_table<-table(hotspots_dt_761[BI_761==F]$allo_hotspot, hotspots_dt_761[BI_761==F]$significant_in_study_no_bi)
+  if(0 %in% conf_table){conf_table <- conf_table + 0.6}
+  test_result1<-fisher.test(conf_table, alternative="greater")
+  print(paste0("test1: OR=", round(test_result1$estimate, 3)))
+  print(paste0("test1: p=", round(test_result1$p.value, 3)))
+  
+  #2. enrichment only allo for CONSERVED
+  conf_table<-table(hotspots_dt_761[BI_761==F]$allo_consv_hotspot, hotspots_dt_761[BI_761==F]$significant_in_study_no_bi)
+  if(0 %in% conf_table){conf_table <- conf_table + 0.6}
+  test_result2<-fisher.test(conf_table, alternative="greater")
+  print(paste0("test2: OR=", round(test_result2$estimate, 3)))
+  print(paste0("test2: p=", round(test_result2$p.value, 3)))
+  
+  
+  #3. enrichment allo+BI for PDZ3
+  conf_table<-table(hotspots_dt_761$hotspot, hotspots_dt_761$significant_in_study_w_bi)
+  if(0 %in% conf_table){conf_table <- conf_table + 0.6}
+  test_result3<-fisher.test(conf_table, alternative="greater")
+  print(paste0("test3: OR=", round(test_result3$estimate, 3)))
+  print(paste0("test3: p=", round(test_result3$p.value, 3)))
+  
+  
+  #4. enrichment allo+BI for CONSERVED
+  conf_table<-table(hotspots_dt_761$consv_hotspot, hotspots_dt_761$significant_in_study_w_bi)
+  if(0 %in% conf_table){conf_table <- conf_table + 0.6}
+  test_result4<-fisher.test(conf_table, alternative="greater")
+  print(paste0("test4: OR=", round(test_result4$estimate, 3)))
+  print(paste0("test4: p=", round(test_result4$p.value, 3)))
+  
+  #annotate all the Pvalues and OR 
+  study_enrichments<-data.table(study=study, OR=c(test_result1$estimate, test_result2$estimate, test_result3$estimate, test_result4$estimate), pvalue=c(test_result1$p.value, test_result2$p.value, test_result3$p.value, test_result4$p.value), test=c(1,2,3,4), n_study_used=c(n_2, n_2, n_1, n_1))
+  
+  enrichments<-rbind(enrichments, study_enrichments)
+  
+}
+
+enrichments[, significant:=pvalue<0.05]
+enrichments[,log2odd_value:=log2(OR)]
+
+best_tests <- enrichments[
+  , .SD[order(pvalue, -OR)][1],  # Order by smallest p-value, then highest OR
+  by = study
+]
+
+studies_id<-best_tests$study
+studies_names<-c("Class-switching residues, Mclaughlin et al. 2012", "Sector residues defined by SCA, Mclaughlin et al. 2012", "Hot residues by PRS, Gerek et al. 2011", "Binding DMS by B2H, top residues, Mclaughlin et al. 2012", "Molecular dynamics simulation, Kumawat et al. 2017", "Conserved thermodynamically coupled residues, Salinas et al 2018", "Thermodynamic double mutant cycle, Gianni et al. 2011", "Conserved mutation correlation analysis, Du et al. 2010", "Rigid residue scan, Kalescky et al. 2015", "Monte Carlo path (MCpath), Kaya et al. 2013")
+best_tests$studies_names<-studies_names
+best_tests[, studies_names_label:=paste0(studies_names," (n=", n_study_used, ")")]
+
+
+ggplot(best_tests[order(log2odd_value)], aes(x=reorder(studies_names_label, log2odd_value), y=log2odd_value, alpha=significant, fill=factor(test, levels=c(2,3,4), labels=c(1,2,3))))+
+  scale_fill_manual(name="enrichment test", values=c("#A4B465", "#FF9800", "#D69ADE"), guide=F)+
+  scale_alpha_manual(name="p.value<0.05", values=c(0.15,1))+
+       #aes(x=factor(reorder(study,log2odd_value), levels=), y=log2odd_value, alpha=pvalue<0.05))+
+  geom_bar(stat="identity")+theme_classic()+
+  #theme(axis.text.x=element_text(angle=90))+
+  coord_flip()+ylab("log2(OR)")+
+  theme(axis.title.y=element_blank(), 
+        axis.text.y=element_text(size=12, face="bold"),
+        axis.title.x=element_text(size=10, face="bold"),
+        axis.text.x=element_text(size=10, face="bold"),
+        legend.text = element_text(size=8),
+        legend.title = element_text(size=8))
+
+
+ggsave(paste0("Figs/Fig4/FigS4Henrichment_previous_studies.png"), width=9, height=3.5)
+```
+
+Showing the plot of enrichments for all tests performed:
+```{r}
+ggplot(enrichments[order(log2odd_value)], aes(x=reorder(study, log2odd_value), y=log2odd_value, alpha=significant, fill=factor(test, levels=c(2,3,4), labels=c(1,2,3))))+
+  scale_fill_manual(name="enrichment test", values=c("#A4B465", "#FF9800", "#C68EFD"), guide=F)+
+  scale_alpha_manual(name="p.value<0.05", values=c(0.15,1))+
+       #aes(x=factor(reorder(study,log2odd_value), levels=), y=log2odd_value, alpha=pvalue<0.05))+
+  geom_bar(stat="identity", position="dodge")+theme_classic()+
+  #theme(axis.text.x=element_text(angle=90))+
+  coord_flip()+ylab("log2(OR)")+
+  theme(axis.title.y=element_blank(), 
+        axis.text.y=element_text(size=12, face="bold"),
+        axis.title.x=element_text(size=10, face="bold"),
+        axis.text.x=element_text(size=10, face="bold"),
+        legend.text = element_text(size=8),
+        legend.title = element_text(size=8))
+```
+
+
+# how the hotspots in PDZ3 relate to the sector concept
+The 43 allosteric hotspot residues are strongly enriched in the previously described ‘sector’ of co-evolving residues in PDZ domains33,34 (n=11, OR=26.13, P=2.96x10-05, one-sided FET considering all residues outside of the binding interface), and this enrichment is stronger for the 15 most conserved hotspots (OR=30.02, P=3.64x10-06)
+```{r}
+PDZ3_annotations<-as.data.table(read.table(paste0("data/external_data/Andre-PSD95-PDZ3_annotations.txt"), header=T, sep="\t"))
+
+# get the sector positions for PDZ3 in structural alignment values
+sector_SCA.Mclaughlin2012_pdz3<-PDZ3_annotations[SCA.Mclaughlin2012==1]$Pos_ref
+
+all_median_ddg_table_subset<-all_median_ddg_table[library=="psd95_pdz3_cript"]
+setnames(all_median_ddg_table_subset, "Uniprot_pos_ref.y", "Uniprot_pos_ref")
+
+sector_SCA.Mclaughlin2012_pdz3_aln<-all_median_ddg_table_subset[Uniprot_pos_ref.x %in% sector_SCA.Mclaughlin2012_pdz3]$structural_alignment_pos
+
+all_allosteric_positions<-unique(allo_hotspots_dt[, .(significant=allo_hotspot[1]), by=.(library, structural_alignment_pos)][significant==T]$structural_alignment_pos)
+
+all_sites_allo<-unique(allo_hotspots_dt$structural_alignment_pos)
+#all_sites_allo<-all_sites_allo[!all_sites_allo %in% unique(BI_hotspots_dt$structural_alignment_pos)]
+all_sites_allo<-all_sites_allo[!all_sites_allo %in% unique(BI_hotspots_dt$structural_alignment_pos)]
+all_sites_allo_consv<-unique(allo_hotspots_dt[allo_consv_hotspot==T]$structural_alignment_pos)
+all_sites_allo_dt<-data.table(structural_alignment_pos=all_sites_allo)
+
+
+all_sites_allo_dt[, allo_hotspot:=structural_alignment_pos %in% all_allosteric_positions]
+all_sites_allo_dt[, allo_hotspot_consv:=structural_alignment_pos %in% all_sites_allo_consv]
+all_sites_allo_dt[, sector_hotspot:=structural_alignment_pos %in% sector_SCA.Mclaughlin2012_pdz3_aln]
+
+
+fisher.test(table(all_sites_allo_dt$allo_hotspot, all_sites_allo_dt$sector_hotspot)+0.6, alternative = "greater")
+fisher.test(table(all_sites_allo_dt$allo_hotspot_consv, all_sites_allo_dt$sector_hotspot), alternative = "greater")
+
+```
+
+Similarly, the most conserved six binding interface hotspots are also enriched in the co-evolving sector (OR=17.16, P=9.6x10-03). 
+```{r}
+# get the sector positions for PDZ3 in structural alignment values
+sector_SCA.Mclaughlin2012_pdz3<-PDZ3_annotations[SCA.Mclaughlin2012==1]$Pos_ref
+
+sector_SCA.Mclaughlin2012_pdz3_aln<-all_median_ddg_table_subset[Uniprot_pos_ref.x %in% sector_SCA.Mclaughlin2012_pdz3]$structural_alignment_pos
+
+all_bi_hotspot_positions<-unique(BI_hotspots_dt[, .(significant=significant[1]), by=.(library, structural_alignment_pos)][significant==T]$structural_alignment_pos)
+
+all_sites_bi<-unique(BI_hotspots_dt$structural_alignment_pos)
+all_sites_bi_consv<-unique(BI_hotspots_dt[BI_consv_hotspot==T]$structural_alignment_pos)
+all_sites_bi_dt<-data.table(structural_alignment_pos=all_sites_bi)
+
+
+all_sites_bi_dt[, bi_hotspot:=structural_alignment_pos %in% all_bi_hotspot_positions]
+all_sites_bi_dt[, bi_hotspot_consv:=structural_alignment_pos %in% all_sites_bi_consv]
+all_sites_bi_dt[, sector_hotspot:=structural_alignment_pos %in% sector_SCA.Mclaughlin2012_pdz3_aln]
+
+fisher.test(table(all_sites_bi_dt$bi_hotspot_consv, all_sites_bi_dt$sector_hotspot), alternative = "greater")
+```
+# Conserved hotspots are mostly in the core
+The complete set of allosteric hotspots (43/ residues, OR=8.91, P=1.343387e-22) is also enriched in the protein core
+```{r}
+# set of any residue site that is a hotspot
+allo_hotspots_dt_tmp<-allo_hotspots_dt[,.(allo_consv_hotspot=allo_consv_hotspot[1], allo_hotspot=allo_hotspot[1], rsasa=rsasa[1], structure_location=structure_location[1]), by=.(library, structural_alignment_pos)]
+
+# enrichment of core in hotspots
+allo_hotspots_dt_tmp[, core:=structure_location=="core"]
+f_test1<-fisher.test(table(allo_hotspots_dt_tmp$core, allo_hotspots_dt_tmp$allo_hotspot), alternative="greater")
+f_test1
+
+f_test2<-fisher.test(table(allo_hotspots_dt_tmp$core==F, allo_hotspots_dt_tmp$allo_hotspot), alternative="less")
+f_test2
+
+enrichment_results_loop_beta_helix<-rbind(enrichment_results_loop_beta_helix, data.table(secondary_structure="core", odds_ratio=f_test1$estimate, p_value=f_test1$p.value, p_fdr_adj=NA))
+enrichment_results_loop_beta_helix<-rbind(enrichment_results_loop_beta_helix, data.table(secondary_structure="surface", odds_ratio=f_test2$estimate, p_value=f_test2$p.value, p_fdr_adj=NA))
+
+
+# Plot again the enrichments taking the libraries as a whole
+ggplot(enrichment_results_loop_beta_helix)+
+  geom_bar(aes(x=factor(secondary_structure, levels=c("helix", "loop", "sheet", "core", "surface"), labels=c("α helix", "loop", "β strand", "core", "surface")), y=log2(odds_ratio), alpha=p_value<0.05),stat="identity", position="dodge")+theme_classic()+scale_alpha_manual(values=c(0.3, 1))+
+  scale_fill_brewer(palette="Set2")+
+  theme(axis.title.x=element_blank(),
+        axis.text.y=element_text(size=13),
+        axis.title.y=element_text(size=15),
+        axis.text.x=element_text(size=13, angle=90, vjust=0.5, hjust=1),
+        legend.text = element_text(size=7))+ylab("log2(OR)")+
+  labs(fill = "")+
+  theme(axis.text.x=element_text(size=13,face="bold", color="black"), 
+        axis.text.y=element_text(size=13,face="bold", color="black"),
+        axis.title.y=element_text(size=13,face="bold", color="black"),legend.position="none")
+
+ggsave(paste0("Figs/Fig4/Fig4Ienrichment_structures.png"), width=2.3, height=4)
+
+```
+
+Indeed 14 of the 16 most conserved allosteric hotspots are always classified as buried in the core in domains where they are classified as hotspots (OR=13.77, P<2.2x10-16), with the only exceptions being surface residues at positions 73 and 61 (Fig. 4h).
+```{r}
+# how many "outside BI" positions could be allosteric
+length(unique(allo_hotspots_dt[binding_interface_contacts==F]$structural_alignment_pos))
+
+# most conserved hotspots are always in the core (when hotspots)
+allo_hotspots_dt_tmp[allo_consv_hotspot==T & allo_hotspot==T][order(structural_alignment_pos)]
+
+fisher.test(allo_hotspots_dt_tmp$core, allo_hotspots_dt_tmp$allo_consv_hotspot & allo_hotspots_dt_tmp$allo_hotspot, alternative = "greater")
+```
+
+
+Positions 73 and 61 are conserved hotspots, and are always in the surface, I check the RSASA values
+```{r}
+allo_hotspots_dt_tmp[allo_consv_hotspot==T & allo_hotspot==T & structure_location=="surface"][order(structural_alignment_pos)]
+```
+
+# hotspots are enriched in core and depleted in surface
+
+The most conserved hotspots are also more likely to be core residues compared to hotspots only classified in one or two PDZ domains (OR=3.35, P=1.10x10-02, Fig. 5a-g).
+```{r}
+# Order by library and structural position
+allo_hotspots_dt_short<-allo_hotspots_dt[,.(allo_hotspot=allo_hotspot[1]), by=.(library, structural_alignment_pos, structure_location)]
+
+# Function to compute enrichment
+compute_enrichment <- function(dt) {
+  result_list <- list()
+  
+  for (lib in unique(dt$library)) {
+    lib_dt <- dt[library == lib]
+    
+    for (sec in unique(lib_dt$structure_location)) {
+      in_block <- lib_dt[structure_location == sec]
+      out_block <- lib_dt[structure_location != sec]
+      
+      # Construct contingency table
+      mat <- matrix(
+        c(sum(in_block$allo_hotspot),
+          sum(!in_block$allo_hotspot),
+          sum(out_block$allo_hotspot),
+          sum(!out_block$allo_hotspot)),
+        nrow = 2,
+        byrow = TRUE
+      )
+      
+      if(sec=="surface"){fisher_res <- fisher.test(mat, alternative="less")}
+      if(sec=="core"){fisher_res <- fisher.test(mat, alternative="greater")}
+      
+      result_list[[paste(lib, sec, sep = "_")]] <- data.table(
+        library = lib,
+        structure_location = sec,
+        odds_ratio = fisher_res$estimate,
+        p_value = fisher_res$p.value
+      )
+    }
+  }
+  
+  rbindlist(result_list)
+}
+
+enrichment_results <- compute_enrichment(allo_hotspots_dt_short)
+#enrichment_results[,p_fdr_adj:=adjust_pvalue(p_value, method = "fdr")]
+
+enrichment_results$library_name<-gsub("_", "-", gsub(" binding ", " | ", (unlist(lapply(enrichment_results$library, lib_code_to_name, libraries, libraries_names)))))
+
+
+
+ggplot(enrichment_results[order(library_name)])+geom_bar(aes(x=structure_location, y=log2(odds_ratio), alpha=p_value<0.05, fill=library_name), stat="identity", position="dodge")+theme_classic()+
+  scale_alpha_manual(values=c( 1, 0.3))+
+  scale_fill_brewer(palette="Set2")+
+  theme(axis.title.x=element_blank(),
+        axis.text.y=element_text(size=13),
+        axis.title.y=element_text(size=15),
+        axis.text.x=element_text(size=13),
+        legend.position="none")+ylab("log2(OR)")+
+  labs(fill = "")
+
+# median odds ratio for sheets
+ggsave(paste0("Figs/Fig4/FigS4I.png"), width=2.5, height=3)
+```
+
+```{r}
+enrichment_results
+```
+
+
+# conservation in sequence and structure
+The most functionally conserved allosteric hotspots are also more conserved in sequence and structure (Fig. 4j,k). 
+
+## conservation in sequence
+```{r}
+# defining hotspot types
+allo_hotspots_dt[,hotspot_type:="non-Hotspot"]
+allo_hotspots_dt[structural_alignment_pos %in% conserved_hotspots$structural_alignment_pos & allo_hotspot, hotspot_type:="conserved"]
+allo_hotspots_dt[!structural_alignment_pos %in% conserved_hotspots$structural_alignment_pos & allo_hotspot, hotspot_type:="variable"]
+
+categories<-c("non-Hotspot", "variable", "conserved")
+categories_names<-c("non-Hotspot", "Hotspot in\n1 or 2 PDZs", "Hotspots\nin >2/5 PDZs")
+allo_hotspots_dt_short<-allo_hotspots_dt[,.(hotspot_type=hotspot_type[1], consv=consv[1]), by=.(library, structural_alignment_pos, secondary_structure)]
+
+allo_hotspots_dt_short_short<-allo_hotspots_dt_short[,.(hotspot_type=paste0(unique(hotspot_type), collapse=","), consv=consv[1]), by=.(structural_alignment_pos)]
+allo_hotspots_dt_short_short[hotspot_type=="non-Hotspot", hotspot_type_plot:="non-Hotspot"]
+allo_hotspots_dt_short_short[grepl("conserved", hotspot_type)==T, hotspot_type_plot:="conserved"]
+allo_hotspots_dt_short_short[grepl("variable", hotspot_type)==T, hotspot_type_plot:="variable"]
+
+ggplot(allo_hotspots_dt_short_short, aes(x=factor(hotspot_type_plot, levels=categories, labels=categories_names), y=consv, fill=hotspot_type_plot, color=hotspot_type_plot))+
+  geom_hline(aes(yintercept = 0), color="grey")+
+  geom_violin(alpha=0.7, scale="width")+
+  geom_point(position="jitter", alpha=0.5)+
+  geom_boxplot(alpha=1, width=0.2, color="black", fill="white", outliers=F)+
+  theme_classic()+
+  stat_compare_means(comparisons=list(c("non-Hotspot", "Hotspot in\n1 or 2 PDZs"), c("Hotspot in\n1 or 2 PDZs", "Hotspots\nin >2/5 PDZs")), size=7, aes(label=after_stat(p.signif)))+
+  scale_fill_manual("",values=c(  "#886ac4","grey50", "#64dd17"))+
+  scale_color_manual("",values=c(  "#886ac4","grey50", "#64dd17"))+
+  theme(legend.position="none",
+        axis.title.x=element_blank(),
+        axis.text.x=element_blank(),
+        axis.ticks.x=element_blank())+
+  ylab("sequence\nconservation score")+
+  ylim(c(-0.4, 1.4))+
+  theme(axis.text.y=element_text(size=10,face="bold", color="black"),
+         axis.title.y=element_text(size=10,face="bold", color="black"))
+
+ggsave(paste0("Figs/Fig4/Fig4Jsequence_conservation.png"), width=2, height=2.3)
+```
+
+## conservation in structure
+```{r warning=FALSE}
+###### load models ###### 
+library(bio3d)
+pdb_dir<-"data/structures/superimposed/"
+model1 <- read.pdb(paste0(pdb_dir, "superimposed_dlg4_pdz3_cript.pdb.pdb"))
+model2 <- read.pdb(paste0(pdb_dir, "superimposed_dlg4_pdz2_cript.pdb.pdb"))
+model3 <- read.pdb(paste0(pdb_dir, "superimposed_dlg4_pdz2_nmdar2a.pdb.pdb"))
+model4 <- read.pdb(paste0(pdb_dir, "superimposed_nhrf3_pdz2_cep164.pdb.pdb"))
+model5 <- read.pdb(paste0(pdb_dir, "superimposed_nhrf3_pdz1_dlgap.pdb.pdb"))
+model6 <- read.pdb(paste0(pdb_dir, "superimposed_nhrf3_pdz1_uhmk1.pdb.pdb"))
+model7 <- read.pdb(paste0(pdb_dir, "superimposed_erbin_pdz1_cript.pdb.pdb"))
+models<-list(model1, model2, model3, model4, model5, model6, model7)
+
+
+###### function ###### 
+#define the function that will compute the local rmsd (actually local euclidean distances)
+calculate_local_rmsd <- function(model1, model2, pair) {
+  index1<-model1$atom$resno==pair[1] &  model1$atom$elety=="CA" & model1$atom$chain=="A"
+  index2<-model2$atom$resno==pair[2] &  model2$atom$elety=="CA" & model2$atom$chain=="A"
+  coord1 <- c(model1$atom$x[index1], model1$atom$y[index1], model1$atom$z[index1])
+  coord2 <- c(model2$atom$x[index2], model2$atom$y[index2], model2$atom$z[index2])
+   # Euclidean distance (squared differences summed)
+  rmsd <- sqrt(sum((coord1 - coord2)^2))   # Root Mean Square Deviation
+  return(rmsd)
+}
+
+
+###### iterate ###### 
+combinations<-t(combn(1:7, 2))
+rmsd_comparisons<-data.table()
+for(i in 1:nrow(combinations)){
+  pair<-combinations[i,]
+  libraries_<-libraries_binding_names[pair]
+  model1<-models[pair[1]]
+  model2<-models[pair[2]]
+  
+  lib1<-libraries_binding_names[pair[1]]
+  lib2<-libraries_binding_names[pair[2]]
+  
+  #paired positions
+  paired_dt<-t(reshape(allo_hotspots_dt[library %in% libraries_, c("structural_alignment_pos", "Pos", "library")], timevar="structural_alignment_pos", idvar="library", direction="wide"))
+  aln_positions<-as.numeric(lapply(strsplit(rownames(paired_dt[-1,]), "[.]"), "[[", 2))
+  paired_dt<-data.table(paired_dt[-1,])
+  paired_dt$structural_alignment_pos<-aln_positions
+  paired_dt <- na.omit(paired_dt)
+  
+  for(b_a_p in paired_dt$structural_alignment_pos){
+    positions<-as.numeric(c(paired_dt[structural_alignment_pos==b_a_p]$V1,paired_dt[structural_alignment_pos==b_a_p]$V2))
+    local_rmsd <- calculate_local_rmsd(model1[[1]], model2[[1]], positions)
+    rmsd_comparisons<-rbind(rmsd_comparisons, data.table(paste0(pair, collapse="-"), paste0(lib1,"-",lib2), local_rmsd, b_a_p))
+    
+    
+  }
+
+}
+
+##### annotate #####
+rmsd_comparisons_studyBI<-rmsd_comparisons
+rmsd_comparisons_studyBI$lib1<-unlist(lapply(strsplit(rmsd_comparisons_studyBI$V2, "-"), "[[", 1))
+rmsd_comparisons_studyBI$lib2<-unlist(lapply(strsplit(rmsd_comparisons_studyBI$V2, "-"), "[[", 2))
+
+rmsd_comparisons_studyBI[, same_pdz:=sub("^(([^_]+)_([^_]+))_.*", "\\1", lib1)==sub("^(([^_]+)_([^_]+))_.*", "\\1", lib2)]
+rmsd_comparisons_studyBI[, same_lig:=sub("^[^_]+_[^_]+_", "", lib1)==sub("^[^_]+_[^_]+_", "", lib2)]
+rmsd_comparisons_studyBI[,class2:=sub("^[^_]+_[^_]+_", "", lib1)=="cep164" | sub("^[^_]+_[^_]+_", "", lib2)=="cep164"]
+rmsd_comparisons_studyBI[,binding_interafce:=b_a_p %in% core_bi]
+rmsd_comparisons_studyBI[same_pdz==T, comparison_class:="same_pdz"]
+rmsd_comparisons_studyBI[same_lig==T, comparison_class:="same_lig"]
+rmsd_comparisons_studyBI[is.na(comparison_class), comparison_class:="unrelated"]
+
+
+unique_non_hotspots_pos<-unique(allo_hotspots_dt[hotspot_type=="non-Hotspot"]$structural_alignment_pos)
+rmsd_comparisons_studyBI[b_a_p %in% unique_non_hotspots_pos, class:="non_hotspot"]
+rmsd_comparisons_studyBI[b_a_p %in% conserved_hotspots$structural_alignment_pos, class:="conserved_hotspot"]
+unique_variable_hotspots_pos<-unique(allo_hotspots_dt[hotspot_type=="variable"]$structural_alignment_pos)
+rmsd_comparisons_studyBI[b_a_p %in% unique_variable_hotspots_pos, class:="variable_hotspot"]
+
+
+## calculate rmsd of the whole group of residues in each category per pairwise comparison ###
+# Join and calculate rmsd of all the residues in each category for each comparison
+rmsd_results <- rmsd_comparisons_studyBI[, .(
+  rmsd_conserved_hotspot = if (.N > 0) sqrt(mean((local_rmsd[class == "conserved_hotspot"])^2)) else NA_real_,
+  rmsd_variable_hotspot = if (.N > 0) sqrt(mean((local_rmsd[class == "variable_hotspot"])^2)) else NA_real_,
+  rmsd_other = if (.N > 0) sqrt(mean((local_rmsd[class == "non_hotspot"])^2)) else NA_real_
+), by = .(V1, V2, lib1, lib2, comparison_class)]
+
+rmsd_results<-melt(rmsd_results, id.vars = c( "V1", "V2", "lib1", "lib2", "comparison_class"))
+categories<-c("rmsd_other", "rmsd_variable_hotspot", "rmsd_conserved_hotspot")
+categories_names<-c("non-Hotspot", "Hotspot in\n1 or 2 PDZs", "Hotspots\nin >2/5 PDZs")
+
+
+ggplot(rmsd_results, aes(x=factor(variable, levels=categories, labels=categories_names), y=value, fill=variable, color=variable))+
+  geom_violin(scale="width", alpha=0.7)+ 
+   geom_point(position="jitter", alpha=0.5)+
+  geom_boxplot(alpha=1, width=0.2, color="black", fill="white", outliers=F)+
+  scale_color_manual("",values=c( "#886ac4","#64dd17","grey50"))+
+  scale_fill_manual("",values=c("#886ac4", "#64dd17","grey50"))+
+  stat_compare_means(comparisons=list(c("non-Hotspot", "Hotspot in\n1 or 2 PDZs"), c("Hotspot in\n1 or 2 PDZs", "Hotspots\nin >2/5 PDZs")), size=7, aes(label=after_stat(p.signif)))+
+  theme_classic()+theme(legend.position="none",
+                        axis.title.x=element_blank(),
+                        axis.text.x=element_blank(),
+                        axis.ticks.x=element_blank())+ylim(c(0,8.5))+ylab("RMSD")+
+  theme(axis.text.y=element_text(size=10,face="bold", color="black"),
+         axis.title.y=element_text(size=10,face="bold", color="black"))
+
+ggsave(paste0("Figs/Fig4/Fig4Kstructure_conservation.png"), width=1.7, height=2.2)
+
+```
+
+
+## RSASA violin plots
+```{r}
+# definiing hotspot types
+allo_hotspots_dt[,hotspot_type:="non-Hotspot"]
+allo_hotspots_dt[structural_alignment_pos %in% conserved_hotspots$structural_alignment_pos & allo_hotspot, hotspot_type:="conserved"]
+allo_hotspots_dt[!structural_alignment_pos %in% conserved_hotspots$structural_alignment_pos & allo_hotspot, hotspot_type:="variable"]
+
+categories<-c("non-Hotspot", "variable", "conserved")
+categories_names<-c("non-Hotspot", "Hotspot in\n1 or 2 PDZs", "Hotspots\nin >2/5 PDZs")
+allo_hotspots_dt_short<-allo_hotspots_dt[,.(hotspot_type=hotspot_type[1], consv=consv[1]), by=.(library, structural_alignment_pos, rsasa)]
+
+allo_hotspots_dt_short[hotspot_type=="non-Hotspot", hotspot_type_plot:="non-Hotspot"]
+allo_hotspots_dt_short[grepl("conserved", hotspot_type)==T, hotspot_type_plot:="conserved"]
+allo_hotspots_dt_short[grepl("variable", hotspot_type)==T, hotspot_type_plot:="variable"]
+
+ggplot(allo_hotspots_dt_short, aes(x=factor(hotspot_type_plot, levels=categories, labels=categories_names), y=rsasa, fill=hotspot_type_plot, color=hotspot_type_plot))+
+  #geom_hline(aes(yintercept = 0.25), color="grey")+
+  geom_violin(alpha=0.5, scale="width")+
+  geom_point(position="jitter", alpha=0.5, size=0.5)+
+  geom_boxplot(alpha=1, width=0.2, color="black", fill="white", outliers=F)+
+  theme_classic()+
+  stat_compare_means(comparisons=list(c("non-Hotspot", "Hotspot in\n1 or 2 PDZs"), c("Hotspot in\n1 or 2 PDZs", "Hotspots\nin >2/5 PDZs")), size=7, aes(label=after_stat(p.signif)))+
+  scale_fill_manual("",values=c(  "#886ac4","grey50", "#64dd17"))+
+  scale_color_manual("",values=c(  "#886ac4","grey50", "#64dd17"))+
+  theme(legend.position="none",
+        axis.title.x=element_blank(),
+        axis.text.x=element_blank(),
+        axis.ticks.x=element_blank())+
+  ylab("RSASA")+
+  ylim(c(0, 1.8))+
+  theme(axis.text.y=element_text(size=10,face="bold", color="black"),
+         axis.title.y=element_text(size=10,face="bold", color="black"))
+
+ggsave(paste0("Figs/Fig4/Fig4Lrsasa_allo_hotspots.png"), width=1.7, height=2.2)
+```
+
+
+
+
+# allosteric innovation in a protein family 
+In addition to the functionally conserved hotspots, for each interaction there is a median of seven additional hotspots only present in one or two PDZ domains.
+```{r}
+# Beyond the conserved allosteric hotspots, all PDZ-ligand interactions contain at least two additional allosteric hotspots
+
+allo_hotspots_dt_variable<-allo_hotspots_dt[allo_hotspot==T & !structural_alignment_pos %in% conserved_hotspots$structural_alignment_pos]
+allo_hotspots_dt_variable_<-allo_hotspots_dt_variable[,.(allo_hotspot=allo_hotspot[1]), by=.(library, structural_alignment_pos)]
+allo_hotspots_dt_variable_counts_per_lib<-allo_hotspots_dt_variable_[,.(N=.N), by=.(library)]
+summary(allo_hotspots_dt_variable_counts_per_lib$N)
+```
+
+how many conserved we have per interaction
+```{r}
+# Beyond the conserved allosteric hotspots, all PDZ-ligand interactions contain at least two additional allosteric hotspots
+
+allo_hotspots_dt_conserved<-allo_hotspots_dt[allo_hotspot==T & structural_alignment_pos %in% conserved_hotspots$structural_alignment_pos]
+allo_hotspots_dt_conserved_<-allo_hotspots_dt_conserved[,.(allo_hotspot=allo_hotspot[1]), by=.(library, structural_alignment_pos)]
+allo_hotspots_dt_conserved_counts_per_lib<-allo_hotspots_dt_conserved_[,.(N=.N), by=.(library)]
+summary(allo_hotspots_dt_conserved_counts_per_lib$N)
+```
+
+# conserved allosteric effects in variable hotspots (SAME PDZ)
+
+PSD95_PDZ2
+```{r}
+#PSD95_PDZ2==DLG4_PDZ2
+allo_hotspots_dt_762<-allo_hotspots_dt[pdz_name=="PSD95_PDZ2"]
+
+#POSITIONS that are hotspots in at least one of them
+hotspot_variable_positions_762<-unique(allo_hotspots_dt_762[allo_hotspot==T & allo_consv_hotspot==F]$structural_alignment_pos)
+
+# get all the dataset for these
+all_ddg_table[, mut:=substr(id, nchar(id), nchar(id))]
+allo_hotspots_dt_762_variableH<-all_ddg_table[pdz=="psd95_pdz2" & assay=="binding" & structural_alignment_pos %in% hotspot_variable_positions_762]
+
+
+allo_hotspots_dt_762_variableH<-reshape(allo_hotspots_dt_762_variableH[,.(structural_alignment_pos, mut, library, ddg, std_ddg)], idvar = c("structural_alignment_pos", "mut"), timevar = "library", direction = "wide")
+
+# compare at the level of mutations
+correlation_762_mutation<-cor(allo_hotspots_dt_762_variableH[,-c("structural_alignment_pos", "mut")])[1,2]
+
+
+ggplot(allo_hotspots_dt_762_variableH, aes(x=ddg.psd95_pdz2_cript, y=ddg.psd95_pdz2_nmdar2a, color=factor(structural_alignment_pos)))+
+  scale_color_brewer(palette="Dark2")+
+  geom_abline(color="grey")+
+  geom_errorbar(aes(xmin = ddg.psd95_pdz2_cript - std_ddg.psd95_pdz2_cript, xmax = ddg.psd95_pdz2_cript + std_ddg.psd95_pdz2_cript), width = 0.1, alpha = 0.3) +
+  geom_errorbar(aes(ymin = ddg.psd95_pdz2_nmdar2a - std_ddg.psd95_pdz2_nmdar2a, ymax = ddg.psd95_pdz2_nmdar2a + std_ddg.psd95_pdz2_nmdar2a), width = 0.1, alpha = 0.3) +
+  geom_hline(color="grey", aes(yintercept = 0))+
+  geom_vline(color="grey", aes(xintercept = 0))+
+  geom_point(alpha=0.8, size=1.5)+theme_classic()+
+  labs(color="Residue")+
+  ylab(libraries_binding_names[3])+
+  xlab(libraries_binding_names[2])+
+  stat_cor(aes(color="black"), color="black", show.legend = F)+
+  ggtitle("PSD95-PDZ3")+
+  xlab("binding CRIPT")+
+  ylab("binding NMDAR2A")
+
+ggsave(paste0("Figs/Fig4/FigS4Jscatter_variable_762.png"), width=3, height=3)
+
+
+```
+
+NHERF3_PDZ1
+```{r}
+allo_hotspots_dt_771<-allo_hotspots_dt[pdz_name=="NHERF3_PDZ1"]
+#positions that are hotspots in at least one of them
+hotspot_positions_771<-unique(allo_hotspots_dt_771[allo_hotspot==T & !structural_alignment_pos %in% conserved_hotspots$structural_alignment_pos]$structural_alignment_pos)
+
+# get all the dataset for these
+allo_hotspots_dt_771_variableH<-all_ddg_table[pdz=="nherf3_pdz1" & assay=="binding" & structural_alignment_pos %in% hotspot_positions_771]
+allo_hotspots_dt_771_variableH$library<-gsub("-", "_",allo_hotspots_dt_771_variableH$library )
+
+allo_hotspots_dt_771_variableH<-reshape(allo_hotspots_dt_771_variableH[,.(structural_alignment_pos, mut, std_ddg, library, ddg)], idvar = c("structural_alignment_pos", "mut"), timevar = "library", direction = "wide")
+
+# compare at the level of mutations
+correlation_771_mutation<-cor(allo_hotspots_dt_771_variableH[,-c("structural_alignment_pos", "mut")])[1,2]
+ggplot(allo_hotspots_dt_771_variableH, aes(x=ddg.nherf3_pdz1_dap_1, y=ddg.nherf3_pdz1_uhmk1, color=factor(structural_alignment_pos)))+
+  scale_color_brewer(palette="Paired")+
+  geom_point(alpha=0.8, size=1.5)+theme_classic()+
+  geom_errorbar(aes(xmin = ddg.nherf3_pdz1_dap_1 - std_ddg.nherf3_pdz1_dap_1, xmax = ddg.nherf3_pdz1_dap_1 + std_ddg.nherf3_pdz1_dap_1), width = 0.1, alpha = 0.3) +
+  geom_errorbar(aes(ymin = ddg.nherf3_pdz1_uhmk1 - std_ddg.nherf3_pdz1_uhmk1, ymax = ddg.nherf3_pdz1_uhmk1+ std_ddg.nherf3_pdz1_uhmk1), width = 0.1, alpha = 0.3) +
+  geom_abline(color="grey")+
+  geom_hline(color="grey", aes(yintercept = 0))+
+  geom_vline(color="grey", aes(xintercept = 0))+
+  labs(color="Residue")+
+  ylab(libraries_binding_names[6])+
+  xlab(libraries_binding_names[5])+
+  stat_cor(aes(color="black"), color="black", show.legend = F)+
+  ggtitle("NHERF3-PDZ1")+
+  xlab("binding DLGAP1-4")+
+  ylab("binding UHMK1")
+ggsave(paste0("Figs/FigureS4K.png"), width=3, height=3)
+```
+
+
+All pairwise comparisons
+```{r}
+library_pairs <- combn(libraries_binding_names, 2, simplify = FALSE)
+correlations_allo_datatable<-data.table()
+
+# for all pairs of libraries
+for(pair in library_pairs){
+  print(pair)
+  allo_hotspots_dt_tmp<-allo_hotspots_dt[library %in% pair]
+#positions that are hotspots in at least one of them
+hotspot_positions_tmp<-unique(allo_hotspots_dt_tmp[allo_hotspot==T & !structural_alignment_pos %in% conserved_hotspots$structural_alignment_pos]$structural_alignment_pos)
+
+# get all the dataset for these
+allo_hotspots_dt_tmp_variableH<-all_ddg_table[library %in% pair & assay=="binding" & structural_alignment_pos %in% hotspot_positions_tmp]
+allo_hotspots_dt_tmp_variableH<-reshape(allo_hotspots_dt_tmp_variableH[,.(structural_alignment_pos, mut, library, ddg)], idvar = c("structural_alignment_pos", "mut"), timevar = "library", direction = "wide")
+
+# compare at the level of mutations
+correlation_tmp_mutation<-cor(na.omit(allo_hotspots_dt_tmp_variableH)[,-c("structural_alignment_pos", "mut")])[1,2]
+p<-ggplot(allo_hotspots_dt_tmp_variableH, aes(x=get(colnames(allo_hotspots_dt_tmp_variableH)[3]), y=get(colnames(allo_hotspots_dt_tmp_variableH)[4]), color=factor(structural_alignment_pos)))+geom_point()+theme_classic()+geom_abline(color="grey")+
+  geom_hline(color="grey", aes(yintercept = 0))+geom_vline(color="grey", aes(xintercept = 0))
+p
+correlations_allo_datatable<-rbind(correlations_allo_datatable, data.table(lib1=pair[1], lib2=pair[2], cor=correlation_tmp_mutation))
+}
+
+
+# define if same ligand, same PDZ etc
+correlations_allo_datatable[, same_pdz:=sub("^(([^_]+)_([^_]+))_.*", "\\1", lib1)==sub("^(([^_]+)_([^_]+))_.*", "\\1", lib2)]
+correlations_allo_datatable[, same_lig:=sub("^[^_]+_[^_]+_", "", lib1)==sub("^[^_]+_[^_]+_", "", lib2)]
+correlations_allo_datatable[same_pdz==T, class:="same_pdz"]
+correlations_allo_datatable[same_lig==T, class:="same_lig"]
+correlations_allo_datatable[same_lig==F & same_pdz==F, class:="unrelated"]
+
+# plot the correlations
+ggplot(correlations_allo_datatable, aes(x=factor(class, levels=c("same_pdz", "same_lig", "unrelated"),labels=c("Same\nPDZ", "Same\nligand", "Unrelated")), y=cor, color=class, fill=class))+
+  geom_boxplot(alpha=0.5)+
+  geom_point(position="jitter")+
+  ylab("variable allosteric\nhotspots pearson\ncorrelation")+
+  theme_classic()+
+  theme(axis.title.x=element_blank(), legend.position="none")+
+  scale_color_manual(values=c( "#9B7EBD", "#B0DB9C", "#DA6C6C"))+
+  scale_fill_manual(values=c( "#9B7EBD", "#B0DB9C", "#DA6C6C"))+
+  ylim(c(0,1))
+  #scale_color_brewer(palette="Paired")+
+  # scale_fill_brewer(palette="Paired")
+ggsave(paste0("Figs/Fig4/FigS4Lcorrelation_variable_sites.png"), width=2.5, height=1.7)
+
+summary(correlations_allo_datatable[same_pdz==F]$cor)
+summary(correlations_allo_datatable[same_lig==T]$cor)
+summary(correlations_allo_datatable[same_lig==F & same_pdz==F]$cor)
+```
+
+
+
+# GOF allosteric sites
+Across all five domains and seven interactions there is only one allosteric hotspot where mutations on average increase ligand binding (median ∆∆Gb<0): position V95 of PSD95-PDZ2 (Extended Data Fig. 4f). V95 is solvent-exposed and located in the β5 strand and all mutations increase binding (∆∆Gb<0, FDR < 0.1, Z-test), with a median ∆∆Gb of -0.45 kcal/mol for binding to CRIPT and -0.45 for binding to NMDAR2A (Fig. 5f,g). 
+```{r}
+allo_hotspots_dt_ddg_not_abs<-left_join(allo_hotspots_dt, all_ddg_table[,.(library,structural_alignment_pos,ddg)][, ddg_not_abs:=ddg][,-c("ddg")])
+
+allo_hotspots_dt_ddg_not_abs[, .(allo_hotspot=allo_hotspot[1], median_ddg_not_abs=median(ddg_not_abs)), by=.(library, structural_alignment_pos, structure_location)][median_ddg_not_abs<0 & allo_hotspot==T]$structural_alignment_pos
+```
+
+```{r}
+summary(all_ddg_table[library=="psd95_pdz2_cript" & structural_alignment_pos==95]$ddg)
+summary(all_ddg_table[library=="psd95_pdz2_nmdar2a" & structural_alignment_pos==95]$ddg)
+```
+
+
+# distance dependence for GOF variants
+The distance-dependent decay for these GOF mutations is weaker than for mutations that are detrimental for binding (median decay rate b=-0.054 and d1/2=11.89 Å for ∆∆Gb<0, and b=-0.096, d1/2=7.23 Å for ∆∆Gb>0) (Extended Data Fig. 5a).
+```{r}
+GOF_positions<-all_ddg_table[ddg<0 & assay=="binding"]
+
+GOF_positions_complete_subset<-GOF_positions
+ggplot(GOF_positions_complete_subset, aes(x=scHAmin_ligand, y=ddg))+geom_point()+facet_wrap(~library)+theme_classic()
+
+# Fit the decay curves
+GOF_positions_curves<-data.table()
+for (lib in libraries_binding_names){
+  GOF_positions_complete_subset_subset<-GOF_positions_complete_subset[library==lib & !is.na(scHAmin_ligand)& !is.na(ddg) & !is.na(scHAmin_ligand) ]
+  xvector_starting=GOF_positions_complete_subset[library==lib & !is.na(scHAmin_ligand)& !is.na(ddg) & !is.na(scHAmin_ligand)& is.na(binding_interface_contacts)]$scHAmin_ligand
+    yvector_starting=abs(as.numeric(GOF_positions_complete_subset[library==lib & !is.na(scHAmin_ligand)& !is.na(ddg) & !is.na(scHAmin_ligand) & is.na(binding_interface_contacts)]$ddg))
+    exponential_curve_fitted<-fit_exponential_curve(xvector=xvector_starting,yvector=yvector_starting,tit,plotfig=F,writepar=FALSE)
+    
+    
+    exponential_estimate<-summary(exponential_curve_fitted)$coefficients[2]
+    
+    #this model is a*e**bx
+    GOF_positions_complete_subset_subset[,allo_predicted:=coef(exponential_curve_fitted)[1]*exp(coef(exponential_curve_fitted)[2]*scHAmin_ligand)]
+    GOF_positions_complete_subset_subset[,coef_individual_curve_a:=coef(exponential_curve_fitted)[1]]
+    GOF_positions_complete_subset_subset[,coef_individual_curve_b:=coef(exponential_curve_fitted)[2]]
+    half_ddg<-max(abs(GOF_positions_complete_subset_subset$ddg))
+    a <- coef(exponential_curve_fitted)[1]
+    b <- coef(exponential_curve_fitted)[2]
+
+    half_ddg <- a / 2  # 50% reduction
+    half_d <- log(half_ddg / a) / b
+  
+    print(paste0("HALF DDG: ", half_ddg))
+    print(paste0("HALF d: ", half_d))
+    GOF_positions_complete_subset_subset$a<-a
+    GOF_positions_complete_subset_subset$b<-b
+    GOF_positions_curves<-rbind(GOF_positions_curves, GOF_positions_complete_subset_subset)
+    
+}
+
+```
+```{r}
+# studying the d1/2 values of these curves
+curve_coefficients<-GOF_positions_curves[,.(a=coef_individual_curve_a[1], b=coef_individual_curve_b[1]), by=.(library)]
+curve_coefficients[,half_ddg := a / 2 ] # 50% reduction
+curve_coefficients[,half_d:=log(half_ddg / a) / b]
+summary(curve_coefficients$half_d)
+
+library(ggnewscale)
+library(RColorBrewer)
+library(ggh4x)
+GOF_positions_curves$library_name<-gsub("_", "-", gsub(" binding ", " | ", (unlist(lapply(GOF_positions_curves$library, lib_code_to_name, libraries, libraries_names)))))
+
+curve_coefficients$library_name<-gsub("_", "-", gsub(" binding ", " | ", (unlist(lapply(curve_coefficients$library, lib_code_to_name, libraries, libraries_names)))))
+
+facet_colors <- setNames(brewer.pal(length(unique(all_allo_table$library_name)), "Set2"), unique(all_allo_table$library_name))
+
+curve_coefficients[, label_half_d:=paste0("d1/2 = ", round(half_d, 3), "Å")]
+
+midpoints <- GOF_positions_curves %>%
+  group_by(library_name) %>%
+  summarise(midpoint_x = mean(range(scHAmin_ligand)))
+
+curve_coefficients <- curve_coefficients %>%
+  left_join(midpoints, by = "library_name")
+
+curve_coefficients[, label_a:=paste0("a = ", round(a, 3))]
+curve_coefficients[, label_b:=paste0("b = ", round(b, 3))]
+
+
+GOF_positions_curves[, allo_predicted_neg:=-allo_predicted]
+GOF_positions_curves[is.na(binding_interface_contacts), binding_interface_contacts:=F]
+ggplot(GOF_positions_curves, aes(x=scHAmin_ligand, y=abs(ddg)))+
+  geom_point(alpha=0.2, aes(color=binding_interface_contacts))+
+  scale_color_manual(values=c("grey40", "tomato"))+
+  new_scale_color()+
+  geom_line(aes(x=scHAmin_ligand, y=allo_predicted), color="black", size=2)+
+  scale_color_brewer(palette="Set2")+
+  facet_grid2(~library_name, strip = strip_themed(
+    text_x = elem_list_text(face = "bold", colour = "black")), scale="free_x") +
+  theme_classic()+
+  theme(legend.position="none",
+        strip.text.x = element_text(size = 10, face = "bold"),
+        strip.background = element_rect(color="grey", fill="white", size=1.5, linetype="solid"
+     ))+
+  geom_text(data=curve_coefficients, aes(label=label_half_d, x=midpoint_x, y=1.4), color="black", font = "bold")+
+  geom_text(data=curve_coefficients, aes(label=label_a, x=midpoint_x, y=1.2), color="black", font = "bold")+
+  geom_text(data=curve_coefficients, aes(label=label_b, x=midpoint_x, y=1.0), color="black", font = "bold")+
+  ylab("|∆∆Gb|")+
+  xlab("distance to the ligand (Å)")+
+  theme(axis.text.x=element_text(size=13,face="bold", color="black"), 
+        axis.text.y=element_text(size=13,face="bold", color="black"),
+        axis.title.y=element_text(size=13,face="bold", color="black"),
+        axis.title.x=element_text(size=13,face="bold", color="black"))+ylim(c(0,1.5))
+
+ggsave(paste0("Figs/Fig5/FigS5Adecay_curves_ddg_GOF.png"), width=14, height=2.7)
+
+summary(curve_coefficients$b)
+summary(curve_coefficients$half_d)
+```
+
+
+
+Compare to only detrimental sites:
+```{r}
+GOF_positions<-all_ddg_table[ddg>0 & assay=="binding"]
+
+GOF_positions_complete_subset<-GOF_positions
+
+# Fit the decay curves
+GOF_positions_curves<-data.table()
+for (lib in libraries_binding_names){
+  GOF_positions_complete_subset_subset<-GOF_positions_complete_subset[library==lib & !is.na(scHAmin_ligand)& !is.na(ddg) & !is.na(scHAmin_ligand)]
+  xvector_starting=GOF_positions_complete_subset[library==lib & !is.na(scHAmin_ligand)& !is.na(ddg) & !is.na(scHAmin_ligand) & is.na(binding_interface_contacts)]$scHAmin_ligand
+    yvector_starting=abs(as.numeric(GOF_positions_complete_subset[library==lib & !is.na(scHAmin_ligand)& !is.na(ddg) & !is.na(scHAmin_ligand) & is.na(binding_interface_contacts)]$ddg))
+    exponential_curve_fitted<-fit_exponential_curve(xvector=xvector_starting,yvector=yvector_starting,tit,plotfig=F,writepar=FALSE)
+    
+    
+    exponential_estimate<-summary(exponential_curve_fitted)$coefficients[2]
+    
+    #this model is a*e**bx
+    GOF_positions_complete_subset_subset[,allo_predicted:=coef(exponential_curve_fitted)[1]*exp(coef(exponential_curve_fitted)[2]*scHAmin_ligand)]
+    GOF_positions_complete_subset_subset[,coef_individual_curve_a:=coef(exponential_curve_fitted)[1]]
+    GOF_positions_complete_subset_subset[,coef_individual_curve_b:=coef(exponential_curve_fitted)[2]]
+    half_ddg<-max(abs(GOF_positions_complete_subset_subset$ddg))
+    a <- coef(exponential_curve_fitted)[1]
+    b <- coef(exponential_curve_fitted)[2]
+
+    half_ddg <- a / 2  # 50% reduction
+    half_d <- log(half_ddg / a) / b
+  
+    print(paste0("HALF DDG: ", half_ddg))
+    print(paste0("HALF d: ", half_d))
+    GOF_positions_complete_subset_subset$a<-a
+    GOF_positions_complete_subset_subset$b<-b
+    GOF_positions_curves<-rbind(GOF_positions_curves, GOF_positions_complete_subset_subset)
+    
+}
+
+```
+```{r}
+# studying the d1/2 values of these curves
+curve_coefficients<-GOF_positions_curves[,.(a=coef_individual_curve_a[1], b=coef_individual_curve_b[1]), by=.(library)]
+curve_coefficients[,half_ddg := a / 2 ] # 50% reduction
+curve_coefficients[,half_d:=log(half_ddg / a) / b]
+summary(curve_coefficients$half_d)
+
+library(ggnewscale)
+library(RColorBrewer)
+library(ggh4x)
+GOF_positions_curves$library_name<-gsub("_", "-", gsub(" binding ", " | ", (unlist(lapply(GOF_positions_curves$library, lib_code_to_name, libraries, libraries_names)))))
+
+curve_coefficients$library_name<-gsub("_", "-", gsub(" binding ", " | ", (unlist(lapply(curve_coefficients$library, lib_code_to_name, libraries, libraries_names)))))
+
+facet_colors <- setNames(brewer.pal(length(unique(all_allo_table$library_name)), "Set2"), unique(all_allo_table$library_name))
+
+curve_coefficients[, label_half_d:=paste0("d1/2 = ", round(half_d, 3), "Å")]
+
+midpoints <- GOF_positions_curves %>%
+  group_by(library_name) %>%
+  summarise(midpoint_x = mean(range(scHAmin_ligand)))
+
+curve_coefficients <- curve_coefficients %>%
+  left_join(midpoints, by = "library_name")
+
+curve_coefficients[, label_a:=paste0("a = ", round(a, 3))]
+curve_coefficients[, label_b:=paste0("b = ", round(b, 3))]
+
+
+GOF_positions_curves[, allo_predicted_neg:=-allo_predicted]
+GOF_positions_curves[is.na(binding_interface_contacts), binding_interface_contacts:=F]
+ggplot(GOF_positions_curves, aes(x=scHAmin_ligand, y=abs(ddg)))+
+  geom_point(alpha=0.2, aes(color=binding_interface_contacts))+
+  scale_color_manual(values=c("grey40", "tomato"))+
+  new_scale_color()+
+  geom_line(aes(x=scHAmin_ligand, y=allo_predicted), color="black", size=2)+
+  scale_color_brewer(palette="Set2")+
+  facet_grid2(~library_name, strip = strip_themed(
+    text_x = elem_list_text(face = "bold", colour = "black")), scale="free_x") +
+  theme_classic()+
+  theme(legend.position="none",
+        strip.text.x = element_text(size = 10, face = "bold"),
+        strip.background = element_rect(color="grey", fill="white", size=1.5, linetype="solid"
+     ))+
+  geom_text(data=curve_coefficients, aes(label=label_half_d, x=midpoint_x, y=3), color="black", font = "bold")+
+  geom_text(data=curve_coefficients, aes(label=label_a, x=midpoint_x, y=2.7), color="black", font = "bold")+
+  geom_text(data=curve_coefficients, aes(label=label_b, x=midpoint_x, y=2.4), color="black", font = "bold")+
+  ylab("|∆∆Gb|")+
+  xlab("distance to the ligand (Å)")+
+  theme(axis.text.x=element_text(size=13,face="bold", color="black"), 
+        axis.text.y=element_text(size=13,face="bold", color="black"),
+        axis.title.y=element_text(size=13,face="bold", color="black"),
+        axis.title.x=element_text(size=13,face="bold", color="black"))
+
+ggsave(paste0("Figs/Fig5/figS5Adecay_curves_ddg_DETRIMENTAL.png"), width=14, height=2.7)
+
+summary(curve_coefficients)
+
+summary(curve_coefficients$b)
+summary(curve_coefficients$half_d)
+```
+
+
+
+# sites enriched in GOF
+
+we considered all mutations in all domains causing a strong decrease in binding energy (∆∆Gb < -0.2 kcal/mol and FDR < 0.1, one-sided Z-test for ∆∆Gb<0). Across domains, between one (PSD95-PDZ3) and 19 (PSD95-PDZ2 binding NMDAR2A) residues are enriched for these GOF mutations (FDR<0.1, one-sided FET, Extended Data Fig. 5b), including multiple surface and in loop residues (Extended Data Fig. 5b,c), but their location is dispersed and varies across PDZ domains and interactions (Extended Data Fig. 5c)
+
+```{r}
+all_ddg_table[,Mut:=substr(id, nchar(id), nchar(id))]
+all_ddg_table_subset<-all_ddg_table[assay=="binding" & is.na(binding_interface_contacts), .(library, structural_alignment_pos, Mut, ddg, std_ddg, rsasa, structure_location, secondary_structure, scHAmin_ligand)]
+
+all_ddg_table_subset[, z_score := (ddg - 0) / std_ddg]
+all_ddg_table_subset[, p_value :=  pnorm(z_score, lower.tail = TRUE)]# one-sided test: ddG < 0
+all_ddg_table_subset$adj_pvalue <- p.adjust(all_ddg_table_subset$p_value, method = "fdr")
+
+all_ddg_table_subset[,positive_allo_mut:=adj_pvalue<0.1 & ddg< -0.2]
+
+all_ddg_table_subset_pos_allostery_counts<-all_ddg_table_subset[positive_allo_mut==T, .(N=.N, rsasa=rsasa[1], structure_location=structure_location[1], scHAmin_ligand=scHAmin_ligand[1], secondary_structure=secondary_structure[1]), by=.(library, structural_alignment_pos)]
+
+all_ddg_table_subset_pos_allostery_counts_neg<-all_ddg_table_subset[positive_allo_mut==F, .(N_not_pos=.N, rsasa=rsasa[1], structure_location=structure_location[1], scHAmin_ligand=scHAmin_ligand[1], secondary_structure=secondary_structure[1]), by=.(library, structural_alignment_pos)]
+
+all_ddg_table_subset_pos_allostery_counts_all<-merge(all_ddg_table_subset_pos_allostery_counts[,-c("library_name")], all_ddg_table_subset_pos_allostery_counts_neg, all = T)
+
+
+# Now, for each row, compare against the rest of the library
+all_ddg_table_subset_pos_allostery_counts_all[is.na(N), N:=0]
+all_ddg_table_subset_pos_allostery_counts_all[is.na(N_not_pos), N_not_pos:=0]
+
+all_ddg_table_subset_pos_allostery_counts_all[, c("fisher_p", "odds_ratio") := {
+  
+  # Subset: rest of the library excluding current position
+  rest <- all_ddg_table_subset_pos_allostery_counts_all[structural_alignment_pos != .BY$structural_alignment_pos | library != .BY$library]
+  
+  # Build 2x2 contingency table
+  mat <- matrix(c(
+    N,                         # N at this position
+    N_not_pos,                 # not-N at this position
+    sum(rest$N, na.rm = TRUE), # total N at other positions
+    sum(rest$N_not_pos, na.rm = TRUE) # total not-N at other positions
+  ), nrow = 2)
+  #print(mat)
+  
+  ft <- fisher.test(mat, alternative="greater")
+  list(ft$p.value, ft$estimate)
+}, by = .(library, structural_alignment_pos)]
+
+
+all_ddg_table_subset_pos_allostery_counts_all$adj_pvalue <- p.adjust(all_ddg_table_subset_pos_allostery_counts_all$fisher_p, method = "fdr")
+
+
+all_ddg_table_subset_pos_allostery_counts_all$library_name<-gsub("_", "-", gsub(" binding ", " | ", (unlist(lapply(all_ddg_table_subset_pos_allostery_counts_all$library, lib_code_to_name, libraries, libraries_names)))))
+pdb_metrics_dt$library_name<-gsub("_", "-", gsub(" binding ", " | ", (unlist(lapply(pdb_metrics_dt$library, lib_code_to_name, libraries, libraries_names)))))
+
+all_ddg_table_subset_pos_allostery_counts_all[,enriched_positive_allo:=adj_pvalue<0.1]
+
+ggplot(all_ddg_table_subset_pos_allostery_counts_all, aes(x=factor(structural_alignment_pos), y=N))+
+  facet_wrap(~library_name, ncol=1)+
+  geom_tile(data=pdb_metrics_dt[!is.na(scHAmin_ligand)], aes(y = 2, fill = secondary_structure), 
+            height = Inf) +
+  scale_fill_manual(values = structure_colors) +#, guide = "none") +
+  #scale_fill_gradient2(low = "deeppink", mid = "grey90", high = "deeppink", 
+  #          midpoint = 0.25, na.value = "grey50")+
+  new_scale("fill")+
+  new_scale("color")+
+  geom_bar(stat="identity", position="dodge", aes(fill=rsasa<0.25, color=adj_pvalue<0.1), size=1)+
+  
+  theme_classic()+ylim(c(0,25))+
+  scale_fill_manual(values=c("cornflowerblue", "grey"))+
+  scale_color_manual(values=c("grey", "black"))+
+#geom_bar(data=all_ddg_table_subset_pos_allostery_counts[N>10], stat="identity", position="dodge", color="black", size=1, aes(fill=rsasa<0.25))+
+#geom_bar(data=all_ddg_table_subset_pos_allostery_counts[N>18], stat="identity", position="dodge", color="red", size=1, aes(fill=rsasa<0.25))+
+  scale_x_discrete(breaks=seq(5,129, by=5), limits=seq(1,129))+
+  scale_y_discrete(breaks=seq(10,20, by=10), limits=seq(1,20))+
+  geom_text(data=all_ddg_table_subset_pos_allostery_counts_all[N>18], aes(label=structural_alignment_pos, y=N+2), size=3)+
+  ylab("strong negative ∆∆Gb mutation count")+
+  xlab("structural_alignment_position")+
+  ylim(c(0,24))+
+   theme(legend.position="none",
+        strip.text.x = element_text(size = 10, face = "bold"),
+        strip.background = element_rect(color="grey", fill="white", size=1.5, linetype="solid"
+     ))+
+  theme(axis.text.x=element_text(size=11,face="bold", color="black"), 
+        axis.text.y=element_text(size=11,face="bold", color="black"),
+        axis.title.y=element_text(size=11,face="bold", color="black"),
+        axis.title.x=element_text(size=11,face="bold", color="black"))
+
+ggsave(paste0("Figs/Fig5/FigS4Bcounts_pos_allostery.png"), width=20, height=9)
+
+```
+
+
+
+the next code shows the residues to be highlighted in chimera to show sites enriched in GOF mutations
+```{r}
+for(lib in libraries_binding_names){
+  print(paste0(pdb_metrics_dt[structural_alignment_pos %in% all_ddg_table_subset_pos_allostery_counts_all[library==lib & enriched_positive_allo==T]$structural_alignment_pos & library==lib]$Pos, collapse=","))
+}
+```
+
+
+# characterizing allosteric surfaces
+
+In all five PDZ domains there are at least two solvent-exposed allosteric hotspots, with between 4.3% and 9.1% of the surface residues defined as hotspots (median of 7.3%) and a total of 14 unique solvent accessible hotspots. 
+```{r}
+allo_hotspots_dt_surfaces_counts<-allo_hotspots_dt[, .(allo_hotspot=allo_hotspot[1]), by=.(library, structural_alignment_pos, structure_location)][structure_location=="surface", .(.N), by=.(library, allo_hotspot)]
+
+allo_hotspots_dt_surfaces_counts_wide<-reshape(allo_hotspots_dt_surfaces_counts, timevar="allo_hotspot", idvar="library", direction="wide")
+
+allo_hotspots_dt_surfaces_counts_wide[, percentage_allo_surface:=N.TRUE/(N.TRUE+N.FALSE)]
+
+summary(allo_hotspots_dt_surfaces_counts_wide$percentage_allo_surface)
+```
+
+Two surface positions are hotspots in a majority of domains: positions 61 and 73 in the structural alignment (Fig. 4h). Position 61 is a hotspot for 4/7 interactions and is a glycine in all domains except ERBIN-PDZ1 where it is deleted. G61 is located in the α1-β4 loop, a median of 13.94 Å from the ligand and mutations in this residue cause a median ∆∆Gb=0.70 kcal/mol (Fig. 6a,b). Position 73 is a hotspot for 5/7 interactions and is located in the β4-α2 loop, at a median distance of 11.56 Å from the ligand (median ∆∆Gb = 0.86 kcal/mol, Fig. 6b,c).
+```{r}
+median(allo_hotspots_dt[structural_alignment_pos==61 & allo_hotspot==T]$ddg)
+median(allo_hotspots_dt[structural_alignment_pos==73 & allo_hotspot==T]$ddg)
+```
+
+
+
+
+Changes in binding energy (∆∆Gb) for mutations in surface hotspot positions correlate strongly for the same domain binding to different ligands (median Pearson’s r = 0.87), but more weakly between different PDZ domains (median r = 0.23), further emphasising the protein-specificity of surface allostery. 
+```{r}
+library_pairs <- combn(libraries_binding_names, 2, simplify = FALSE)
+correlations_allo_datatable<-data.table()
+all_ddg_table[, mut:=substr(id, nchar(id), nchar(id))]
+
+# for all pairs of libraries
+for(pair in library_pairs){
+  print(pair)
+  allo_hotspots_dt_tmp<-allo_hotspots_dt[library %in% pair & structure_location=="surface" & allo_hotspot==T]
+#positions that are hotspots in at least one of them
+hotspot_positions_tmp<-unique(allo_hotspots_dt_tmp[allo_hotspot==T & !structural_alignment_pos %in% conserved_hotspots$structural_alignment_pos]$structural_alignment_pos)
+
+# get all the dataset for these
+allo_hotspots_dt_tmp_variableH<-all_ddg_table[library %in% pair & assay=="binding" & structural_alignment_pos %in% hotspot_positions_tmp]
+allo_hotspots_dt_tmp_variableH<-reshape(allo_hotspots_dt_tmp_variableH[,.(structural_alignment_pos, mut, library, ddg)], idvar = c("structural_alignment_pos", "mut"), timevar = "library", direction = "wide")
+
+# compare at the level of mutations
+correlation_tmp_mutation<-cor(na.omit(allo_hotspots_dt_tmp_variableH)[,-c("structural_alignment_pos", "mut")])[1,2]
+correlations_allo_datatable<-rbind(correlations_allo_datatable, data.table(lib1=pair[1], lib2=pair[2], cor=correlation_tmp_mutation))
+}
+
+
+
+# define if same ligand, same PDZ etc
+correlations_allo_datatable[, same_pdz:=sub("^(([^_]+)_([^_]+))_.*", "\\1", lib1)==sub("^(([^_]+)_([^_]+))_.*", "\\1", lib2)]
+correlations_allo_datatable[, same_lig:=sub("^[^_]+_[^_]+_", "", lib1)==sub("^[^_]+_[^_]+_", "", lib2)]
+correlations_allo_datatable[same_pdz==T, class:="same_pdz"]
+correlations_allo_datatable[same_lig==T, class:="same_lig"]
+correlations_allo_datatable[same_lig==F & same_pdz==F, class:="unrelated"]
+
+summary(correlations_allo_datatable[same_pdz==T]$cor)
+summary(correlations_allo_datatable[same_pdz==F]$cor)
+```

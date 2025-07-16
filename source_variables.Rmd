@@ -1,0 +1,1041 @@
+---
+title: "PDZ Allostery Map: source variables/functions"
+author: "Aina Martí-Aranda"
+date: "June 2025"
+output:
+  html_document:
+    toc: true
+    theme: cerulean
+    toc_float: true
+    toc_collapsed: true
+---
+
+```{r setup, include=FALSE}
+library(rmdformats)
+library(seqinr)
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Define variables
+```{r}
+base_dir<-"/Users/aa33/Library/CloudStorage/OneDrive-WellcomeSangerInstitute/001-Projects/03-PDZ_Homologs/02-DryLab/001-data_analysis/data_analysis_github/"
+setwd(base_dir)
+
+# library code names 
+libraries<-c("761_abundance", "761_808",
+             "762_abundance","762_808","762_809",
+             "770_abundance","770_818", 
+             "771_abundance", "771_810", "771_819",
+             "777_abundance","777_808")
+
+# corresponding Protein names used
+libraries_names_plots<-c("PSD95_PDZ3 abundance","PSD95_PDZ3 binding CRIPT",
+                   "PSD95_PDZ2 abundance","PSD95_PDZ2 binding CRIPT","PSD95_PDZ2 binding NMDAR2A",
+                   "NHERF3_PDZ2 abundance","NHERF3_PDZ2 binding CEP164", 
+                   "NHERF3_PDZ1 abundance", "NHERF3_PDZ1 binding DAP-1", "NHERF3_PDZ1 binding UHMK1",
+                   "ERBIN_PDZ1 abundance", "ERBIN_PDZ1 binding CRIPT")
+libraries_names<-gsub(" abundance", "", gsub(" binding ", "_", tolower(libraries_names_plots)))
+
+
+libraries_binding<-c("761_808","762_808", "762_809", 
+                     "770_818", "771_810",  "771_819",
+                     "777_808")
+
+pdz_codes<-c("761", "762", "770", "771", "777")
+pdz_names<-c("PSD95_pdz3", "PSD95_pdz2","NHERF3_pdz2", "NHERF3_pdz1", "ERBIN_pdz1")
+
+libraries_folding<-libraries[which(substr(libraries, 5,7)=="abu")]
+libraries_binding<-libraries[which(substr(libraries, 5,7)!="abu")]
+
+
+libraries_folding_names<-libraries_names[which(libraries %in% libraries_folding)]
+libraries_binding_names<-libraries_names[which(libraries %in% libraries_binding)]
+
+
+#uniprot start positions for each domain library assayed (for annotations)
+start_positions<-c(311, 311, 157, 157, 157, 123, 123, 1,1,1,1321,1321)
+backgrounds<-c(5, 5, 33, 33, 33, 25, 25, 24, 24, 24, 32, 32)
+start_end_libs<-c(39, 39, 46, 46, 46, 56, 56, 54, 54, 54, 46, 46)
+
+```
+
+
+# load some data
+```{r}
+aa_sequences_end<- seqinr::read.fasta(file = "data/fasta_sequences/fasta_sequences_end.fasta")
+aa_sequences_start<- seqinr::read.fasta(file = "data/fasta_sequences/fasta_sequences_start.fasta") 
+aa_sequences<- seqinr::read.fasta(file = "data/fasta_sequences/fasta_sequences.fasta")   
+
+pdz_sequences_nt<-c()
+pdz_sequences_aa_end<-c()
+pdz_sequences_aa_start<-c()
+pdz_sequences_all_aa<-c()
+counter=1
+
+#prepare aa sequences
+for(pdz in aa_sequences_end){pdz_sequences_aa_end<-c(pdz_sequences_aa_end, toupper(paste0(pdz, collapse="")))}
+for(pdz in aa_sequences_start){pdz_sequences_aa_start<-c(pdz_sequences_aa_start, toupper(paste0(pdz, collapse="")))}
+for(pdz in aa_sequences){pdz_sequences_all_aa<-c(pdz_sequences_all_aa, toupper(paste0(pdz, collapse="")))}
+```
+
+
+#variables for heatmaps
+```{r}
+aa_order<-c("G", "A","V","L","M","I","F","Y","W","K","R","H","D","E","S","T","C","N","Q","P","*")
+aa_order2<-c("G", "A","V","L","M","I","F","Y","W","K","R","H","D","E","S","T","C","N","Q","P")
+colors_aa<-c("orange", rep("azure4", 5), rep("brown", 3), rep("blue", 3), rep("brown1", 2), rep("darkgreen", 5), "darkgoldenrod1", "black")
+```
+
+
+
+# functions
+```{r}
+find_mutated_list<-function(aa_seq_, wt){
+  list_mutated<- unlist(tstrsplit(wt, "")!=unlist(tstrsplit(aa_seq_, "")))
+  return(paste0(paste0(tstrsplit(wt, "")[list_mutated],which(list_mutated==T), tstrsplit(aa_seq_, "")[list_mutated]), collapse=","))
+}
+
+find_mutated<-function(aa_seq_, wt){
+  list_mutated<- unlist(tstrsplit(wt, "")!=unlist(tstrsplit(aa_seq_, "")))
+  return(paste0(paste0(tstrsplit(wt, "")[list_mutated],which(list_mutated==T), tstrsplit(aa_seq_, "")[list_mutated]), collapse=","))
+}
+
+find_mutated2<-function(aa_seq_, wt){
+  list_mutated<- unlist(tstrsplit(wt, "")!=unlist(tstrsplit(aa_seq_, "")))
+  return(paste0(tstrsplit(wt, "")[list_mutated],which(list_mutated==T)))
+}
+
+find_mutated3<-function(aa_seq_, wt){
+  list_mutated<- unlist(tstrsplit(wt, "")!=unlist(tstrsplit(aa_seq_, "")))
+  return(paste0(tstrsplit(aa_seq_, "")[list_mutated],which(list_mutated==T)))
+}
+
+
+find_background_mutation<-function(aa_seq_, wt, bckgr){
+  list_mutated<- unlist(tstrsplit(wt, "")!=unlist(tstrsplit(aa_seq_, "")))
+  if(list_mutated[bckgr]==TRUE){
+    return(c(bckgr, tstrsplit(aa_seq_, "")[bckgr]))
+  }
+  else{return(c(NA, NA))}
+}
+
+find_single_mutation<-function(aa_seq_, wt, bckgr){
+  list_mutated<- unlist(tstrsplit(wt, "")!=unlist(tstrsplit(aa_seq_, "")))
+  pos_mutated<-which(list_mutated==T)
+  #print(pos_mutated)
+  pos_single<-pos_mutated[which(pos_mutated!=bckgr)]
+  #print(length(pos_single))
+  if(length(pos_single)==1){
+    #print(pos_single[1])
+    return(c(pos_single[1], tstrsplit(aa_seq_, "")[pos_single[1]][[1]]))
+  }
+  else{#print(c(NA, NA))
+    return(c(NA, NA))}
+}
+
+extract_prediction<-function(row){
+  #print(row)
+  #print(paste0("fold_", row["Fold"]))
+  return(as.numeric(row[paste0("fold_", as.numeric(row["Fold"]))]))}
+
+extract_additive_trait_old<-function(row){
+  row<-as.list(row)
+  predicted_phenotype_col = paste0("fold_", as.character(row$Fold), "_additive_trait0")
+  return(as.numeric(row[predicted_phenotype_col]))}
+
+extract_additive_trait<-function(row, trait){
+      row<-as.list(row)
+      if(row$category=="WT"){return(0)}
+      else{
+        if(trait=="folding"){return(as.numeric(row[row$additive_trait_column_f]))}
+        else{return(as.numeric(row[row$additive_trait_column_b]))}
+      }}
+
+extract_additive_trait_b_old<-function(row){
+  row<-as.list(row)
+  predicted_phenotype_col = paste0("fold_", as.character(row["Fold"]), "_additive_trait1")
+  return(as.numeric(row[predicted_phenotype_col]))}
+
+
+
+correlation_homolog_positions<-function(df1, df2, position){
+  ddg1<-df1[alignment_pos==position]
+  ddg2<-df2[alignment_pos==position]
+  both<-left_join(ddg1, ddg2, by="mutation")
+  return(c(unique(ddg1$WT_aa), unique(ddg2$WT_aa), cor(both$ddg.x, both$ddg.y), abs(median(ddg1$ddg)-median(ddg2$ddg))))
+}
+
+combinations<-function(list){
+  v1<-c()
+  v2<-c()
+  for(e1 in list){
+    for(e2 in list){
+      if(e1!=e2){
+        add=T
+        for(i in 1:length(v1)){
+          pair<-c(v1[i], v2[i])
+          if(e1 %in% pair & e2 %in% pair){
+            add=F
+          }
+        }
+        if(add){
+          v1<-c(v1, e1)
+          v2<-c(v2, e2)
+        }
+      }
+    }
+  }
+  return(data.table(v1, v2))
+}
+
+```
+
+
+# pdb distances function
+```{r}
+doubledeepms__minimum_interchain_distances_from_PDB_perres <- function(
+	input_file,
+  chain_query = "A",
+  chain_target = "B"
+  ){
+  
+  #load PDB structure
+#	sink(file = "/dev/null")
+  pdb <- bio3d::read.pdb(input_file, rm.alt = TRUE)
+#	sink()
+
+  ### Atom selections
+  ###########################
+
+	#Protein atoms
+  sele_protein <- bio3d::atom.select(pdb, "protein", verbose=FALSE)
+	#Hydrogen atoms
+  sele_H <-bio3d::atom.select(pdb, "h", verbose=FALSE)
+	#Water atoms
+  sele_water <- bio3d::atom.select(pdb, "water", verbose=FALSE)
+	#Side chain atoms
+  sele_sc <- bio3d::atom.select(pdb, "sidechain", verbose=FALSE)
+	#C-alpha atoms
+  sele_ca <- bio3d::atom.select(pdb, "calpha", verbose=FALSE)
+	#Glycine c-alpha atoms
+  sele_glyca <- bio3d::atom.select(pdb, resid = "GLY", string = "calpha", verbose=FALSE)
+
+  ### Combine atom selections
+  ###########################
+
+  #Heavy atoms
+	sele_HA <- bio3d::combine.select(sele_protein, sele_H, sele_water, operator = "-", verbose=FALSE)
+
+  #Side chain heavy atoms + c-alpha for glycine
+	sele_prot_sc <- bio3d::combine.select(sele_protein, sele_sc, operator = "AND", verbose=FALSE)
+	sele_prot_sc_glyca <- bio3d::combine.select(sele_prot_sc, sele_glyca, operator = "OR", verbose=FALSE)
+	sele_scHA <- bio3d::combine.select(sele_prot_sc_glyca, sele_H, sele_water, operator = "-", verbose=FALSE)
+
+	#List
+	sele_list <- list(
+		"HA" = sele_HA,
+		"scHA" = sele_scHA)
+
+  ### Calculate minimum target chain distances
+  ###########################
+
+ 	result_dt <- data.table()
+  for(metric in names(sele_list)){
+	  #Distance matrix
+		pdb_sub <- bio3d::trim.pdb(pdb, sele_list[[metric]])
+	  dist_mat <- bio3d::dm.xyz(pdb_sub$xyz, grpby=apply(pdb_sub$atom[,c("resno", "chain")], 1, paste, collapse = "_"), scut=0, mask.lower = FALSE)
+	  resno_sub <- unique(pdb_sub$atom[,c("resno", "chain")])
+	  #Ligand distance matrix
+	  ligand_dist <- dist_mat[resno_sub[,"chain"]==chain_query,resno_sub[,"chain"]==chain_target]
+	  ligand_dist_df <- ligand_dist
+	  colnames(ligand_dist_df) <- resno_sub[resno_sub[,"chain"]==chain_target,"resno"]
+	  rownames(ligand_dist_df) <- resno_sub[resno_sub[,"chain"]==chain_query,"resno"]
+	  #chain target names
+	  #Absolute residue number
+	  ligand_dist_dt <- data.table(Pos = resno_sub[resno_sub[,"chain"]==chain_query,"resno"])
+	  #Minimum ligand distance
+	  ligand_dist_dt[, min_dist := apply(ligand_dist, 1, min)]
+	  names(ligand_dist_dt)[2] <- paste0(metric, "min_ligand")
+	  if(nrow(result_dt)==0){
+	  	result_dt <- ligand_dist_dt
+	  }else{
+	  	result_dt <- merge(result_dt, ligand_dist_dt, by = "Pos", all = T)
+	  }
+	 result_dt_with_ligand_matrix <- cbind(result_dt, ligand_dist_df)
+  }
+
+  #Return
+	return(result_dt_with_ligand_matrix)
+
+}
+
+
+doubledeepms__pdzhomologs__predict_fitness <- function(
+  mochi_ab_weights_path,
+  mochi_bind_weights_path,
+  block,
+  folding_energy,
+  binding_energy,
+  RT = 0.001987*(273+24)
+  ){
+  #Load model
+  
+  
+  if(block==1){
+    modpar_f <- fread(paste0(mochi_ab_weights_path, "_b1.txt"), header = T)
+    modpar_b <- fread(paste0(mochi_bind_weights_path, "_b1.txt"), header = T)
+    modpar<-merge(modpar_f, modpar_b, by="fold", suffix=c("_f", "_b"))
+  }
+  if(block==2){
+    modpar_f <- fread(paste0(mochi_ab_weights_path, "_b2.txt"), header = T)
+    modpar_b <- fread(paste0(mochi_bind_weights_path, "_b2.txt"), header = T)
+    modpar<-merge(modpar_f, modpar_b, by="fold", suffix=c("_f", "_b"))
+  }
+
+  #Predicted fitness
+  pred_list <- list()
+
+  #Folding fitness
+  if(!is.null(folding_energy)){
+    pred_list[["fraction_folded"]] <- doubledeepms__fraction_folded(folding_energy, RT)
+    pred_list[["fitness_folding"]] <- pred_list[["fraction_folded"]] * modpar[["kernel_f"]][1] + modpar[["bias_f"]][1]
+  }
+
+  #Binding fitness
+  if(!is.null(folding_energy) & !is.null(binding_energy) & length(folding_energy) == length(binding_energy)){
+    pred_list[["fraction_bound"]] <- doubledeepms__fraction_bound(folding_energy, binding_energy, RT)
+    pred_list[["fitness_binding"]] <- pred_list[["fraction_bound"]] * modpar[["kernel_b"]][1] + modpar[["bias_b"]][1]
+  }
+  #Return
+  return(pred_list)
+}
+
+doubledeepms__pdzhomologs__predict_binding_fitness_from_folding_fitness2 <- function(
+  folding_fitness, 
+  folding_linear_kernel,
+  folding_linear_bias,
+  binding_linear_kernel,
+  binding_linear_bias,
+  b_dg_wt,
+  RT = 0.001987*(273+24)
+  ){
+  Cb <- exp(b_dg_wt/RT)
+  return(binding_linear_kernel/(Cb*folding_linear_kernel/(folding_fitness-folding_linear_bias)+1)+binding_linear_bias)
+}
+
+doubledeepms__pdzhomologs__predict_binding_fitness_from_folding_fitness <- function(
+  folding_fitness, 
+  folding_linear_kernel,
+  folding_linear_bias,
+  binding_linear_kernel,
+  binding_linear_bias,
+  b_dg_wt,
+  RT = 0.001987*(273+24)
+  ){
+  Cbwt <- exp(b_dg_wt/RT)
+  
+  return((1/(1+(Cbwt*folding_linear_kernel/(folding_fitness-folding_linear_bias))))*binding_linear_kernel+binding_linear_bias)
+}
+
+pdzhomologs__predict_binding_fitness_from_folding_fitness <- function(
+  folding_fitness, 
+  folding_linear_kernel,
+  folding_linear_bias,
+  binding_linear_kernel,
+  binding_linear_bias,
+  RT = 0.001987*(273+24)
+  ){
+  
+  #Folding fitness
+  fraction_folded=pred_list[["fraction_folded"]] * modpar[["kernel_f"]][1] + modpar[["bias_f"]][1]
+  folding_fitness_<-log((1/folding_fitness)-1)
+  
+  pred_list[["fraction_folded"]] <- doubledeepms__fraction_folded(folding_energy, RT)
+    pred_list[["fitness_folding"]] <- pred_list[["fraction_folded"]] * modpar[["kernel_f"]][1] + modpar[["bias_f"]][1]
+  }
+  
+  
+  
+  
+#  Cb <- exp(b_dg_wt/RT)
+#  return(binding_linear_kernel/(Cb*folding_linear_kernel/(folding_fitness-folding_linear_bias)+1)+binding_linear_bias)
+#}
+
+
+
+
+
+
+
+doubledeepms__pdzhomologs__plot_additive_trait_binding<- function(
+    lib_code,
+    b,
+    dt_additive_traits,
+    base_dir,
+    num_binding_libraries, 
+    this_lib_index,
+    RT = 0.001987*(273+24)
+){
+  #define ranges
+  folding_energy_range <- range(dt_additive_traits$additive_trait_f)
+  binding_energy_range <- range(dt_additive_traits$additive_trait_b)
+  
+  # define grids
+  num_grid <- 15 # number of grid points
+  folding_energy_grid <- seq(folding_energy_range[1], folding_energy_range[2], (folding_energy_range[2]-folding_energy_range[1])/num_grid)
+  binding_energy_grid <- seq(binding_energy_range[1], binding_energy_range[2], (binding_energy_range[2]-binding_energy_range[1])/num_grid)
+  energy_grid_dt <- as.data.table(expand.grid(folding_energy_grid = folding_energy_grid, binding_energy_grid = binding_energy_grid))
+  
+  # define where are the mochi output paths
+  mochi_outpath<-paste0(base_dir, "data/MoCHI/",  sub("^([^_]+_[^_]+).*", "\\1", lib), "/mochi_project/task_1/")
+  
+  #which binding is this one
+  mochi_ab_file<-paste0(mochi_outpath, "weights/linears_weights_Abundance")
+  
+  if(num_binding_libraries==1){mochi_bind_file<-paste0(mochi_outpath, "weights/linears_weights_binding")}
+  else{mochi_bind_file<-paste0(mochi_outpath, "weights/linears_weights_binding", this_lib_index)}
+  
+  #Predicted fitness
+pred_fitness_list <- doubledeepms__pdzhomologs__predict_fitness(
+  mochi_ab_weights_path = mochi_ab_file,
+  mochi_bind_weights_path = mochi_bind_file,
+  block=b,
+  folding_energy = energy_grid_dt[,folding_energy_grid],
+  binding_energy = energy_grid_dt[,binding_energy_grid],
+  RT = RT)
+
+pred_fitness_dt <- data.table(
+    f_dg_pred = rep(energy_grid_dt[,folding_energy_grid], 2),
+    b_dg_pred = rep(energy_grid_dt[,binding_energy_grid], 2),
+    observed_fitness = pred_fitness_list[["fitness_binding"]],
+    mut_order = rep(c(1, 2), each = energy_grid_dt[,.N]))
+
+plot3D::persp3D(
+  x = folding_energy_grid, 
+  y = binding_energy_grid, 
+  z = matrix(data=pred_fitness_dt[,observed_fitness], nrow=length(folding_energy_grid), ncol=length(folding_energy_grid)), 
+  r = 2, shade = 0.4, axes = TRUE, scale = TRUE, box = T,
+  nticks = 5, ticktype = "detailed", 
+  colvar = NULL, col = "white", alpha = 0, space=0.9,
+  phi = 20, # y axis
+  theta = 45, # x axis
+  border = "red", lwd = 0.5,
+  #xlab = "dG Folding", 
+  #ylab = "dG Binding", 
+  #zlab = "Fitness (Binding)", 
+  xlab = "", ylab = "", zlab = ""
+)
+plot3D::scatter3D(
+    x = dt_additive_traits$additive_trait_f,#weights_f_subset[c(1:300),]$mean_kcal.mol, 
+    y = dt_additive_traits$additive_trait_b, 
+    z = dt_additive_traits$observed_fitness, 
+    add = T, col = "black", alpha = 0.15, cex = 0.2)
+}
+  
+
+```
+
+
+# other doubledeepms functions (maybe modified)
+```{r}
+doubledeepms__fraction_folded <- function(
+  folding_energy,
+  RT = 0.001987*(273+24)){
+  return(1/(1+exp(folding_energy/RT)))
+}
+
+doubledeepms__fraction_bound <- function(
+  folding_energy,
+  binding_energy,
+  RT = 0.001987*(273+24)){
+  return(1/(1+exp(binding_energy/RT)*(1+exp(folding_energy/RT))))
+}
+
+```
+
+#allostery functions
+```{r}
+#function for good starting values
+residual_sum_of_squares <- function(params) {
+  a <- params[1]
+  b <- params[2]
+  predicted <- a * exp(b * xvector_starting)
+  sum((yvector_starting - predicted)^2)
+}
+
+#function to fit exp decay
+fit_exponential_curve<-function(xvector,yvector,tit,plotfig=TRUE,writepar=FALSE){
+
+#init data frame
+data <- data.table(x = xvector, y = yvector)
+
+#find good starting parameter values that minimize the residual sum of squares
+initial_guess <- c(a = 2.5, b = -0.1)  # initial guess
+optimized_params <- optim(initial_guess, residual_sum_of_squares)$par
+
+#use the optimized parameters in nls
+fit <- nls(y ~ a * exp(b * x), data = data, start = optimized_params)
+summary(fit)
+
+x_seq <- seq(min(xvector), max(xvector), length.out = 100)
+
+#calculate the corresponding y-values using the fitted model
+fitted_values <- predict(fit, newdata = data.frame(x = x_seq))
+
+parameters<-fit$m$getPars()
+parameters_anno<-paste0("a=",as.character(round(parameters[1],digits = 3)),", b=",as.character(round(parameters[2],digits = 3)))
+
+#calculate running mean over a 5A window to compare with the exponential fit
+rmean<-c()
+for (xvalue in x_seq){
+  rmean<-c(rmean,mean(data[x>xvalue-2.5 & x<xvalue+2.5,]$y))
+}
+ylowlim<-min(yvector)
+if (ylowlim>0){ylowlim<-0}
+
+if (plotfig){
+#plot
+plot_data <- data.frame(x = xvector, y = yvector)
+fitted_values_df <-data.frame(x_seq=x_seq,Fitted=fitted_values,running_mean=rmean)
+print(ggplot(data = plot_data, aes(x = x, y = y)) +
+  geom_point(col=alpha("black",0.5)) + 
+  labs(x = "distance to the active site (Å)", y = "ddGa", title = tit) +
+  theme_classic() +
+  theme(legend.position = "topright") +
+  geom_line(data=fitted_values_df,aes(x = x_seq, y = Fitted), color = "red", size = 1) +  # Fitted curve
+  geom_line(data=fitted_values_df,aes(x = x_seq, y = rmean), color = "blue", size = 1) +  # running mean to compare with fit
+  annotate(geom="text",x=30-5,y=max(yvector), label=parameters_anno,
+              color="red")+
+  coord_cartesian(ylim=c(ylowlim,max(yvector)),xlim=c(3,27))+
+  scale_x_continuous(breaks = round(seq(5, 25, by = 5))))
+
+#ggsave(paste("output_files",paste(tit,"pdf",sep="."),sep="/"))
+}
+
+if (writepar){
+  return(fit$m$getPars())
+}
+
+predicted<-predict(fit, newdata = data.frame(x = xvector))
+print(cor(predicted,yvector)**2)
+
+return(fit)
+  
+}
+
+create_chimera_attr_file<-function(df_original, column_name, outfile, binary=F, binary_true="", binary_false=""){
+  df<-copy(df_original)
+  setnames(df, column_name, "target_col")
+  if(binary){df$target_col<-factor(df$target_col, levels=c(binary_true, binary_false), labels=c(1,0))}
+  df$row<-paste0("\t", ":", df$Pos, "\t", df$target_col)
+  write_text<-c(paste0("attribute: ",column_name,"\t"), "recipient: residues\t", df$row)
+  write.table(write_text, file=outfile, quote = F, row.names = F, col.names = F)
+}
+
+
+lib_code_to_name<-function(lib_names_vector, libraries, libraries_names){
+  for(lib in libraries){lib_names_vector<-replace(lib_names_vector,lib_names_vector==lib,libraries_names[which(libraries==lib)])}
+  return(lib_names_vector)
+}
+```
+
+
+
+
+
+#plot functions
+```{r}
+gg_medians_alignment_heatmap<-function(all_ddg_table, assay_plotted="binding", yname="library"){
+  p <- ggplot(all_ddg_table[assay==assay_plotted,], aes(x = as.factor(structural_alignment_pos), 
+    y = library, fill = median_ddg, label = WT_aa)) + 
+    geom_tile() + 
+    #geom_tile(data = all_ddg_table[binding_interface_contacts==T], fill = "transparent", color="grey", size = 0.7) + 
+    theme_linedraw(base_size = 14) + 
+    geom_text(color = "black") + 
+    scale_color_manual(values = c("transparent", 
+    "black", "grey60"), name = "distance to\nligand (A)") + 
+    scale_fill_gradient2(low = "blue", high = "red", mid = "white", 
+      na.value = "grey50", name = "median_ddg", 
+      midpoint = 0) + theme(legend.position = "top", legend.key.width = unit(1, 
+    "cm")) + 
+    theme(axis.text.x = element_text(angle = 0, vjust = 0.2)) + 
+    theme(panel.border = element_rect(colour = "white", fill = NA, size = 0), panel.grid.minor = element_blank()) + 
+    ylab(yname) + 
+    xlab("alignment_position")
+  
+  if(assay_plotted=="folding"){p <- p+geom_tile(data = all_ddg_table[assay=="binding" & binding_interface_contacts==T], 
+      fill = "transparent", color="black", size = 0.7, aes(y=factor(pdz, levels=pdz_codes, labels=libraries_folding)))}
+  else{p <- p+geom_tile(data = all_ddg_table[assay==assay_plotted & binding_interface_contacts==T], 
+      fill = "transparent", color="black", size = 0.7) }
+  
+  return(p)
+}
+gg_replicate_fitness_correlations <- function(table_subset, mapping, ...){
+  p<-eval(substitute( ggpairs(table_subset,
+            diag=list("continuous" = function(data, mapping, ...){ggally_text(rlang::as_label(mapping$x),col="black", size=5)}),
+            #diag=list("continuous" = function(data, mapping, ...){ggally_text("",col="black", size=5)}),
+            #diag = list(continuous = "blankDiag"),
+            lower=list(continuous=my_fn),
+            #upper=list(continuous=wrap("cor", method = "spearman")))+
+            upper = list(continuous = function(data, mapping, ...) {
+         ggally_cor(data = data, mapping = mapping, size = 6, title="                       ",justify_labels = "up", nudge_y=0.76, stars=F)}))+
+            #upper = list(continuous = wrap("cor",size=4))) +
+              ggtitle(libraries_names[counter]) + 
+              theme_pubr(base_size = 14)+ 
+              theme(legend.position = "none", 
+                    strip.background = element_rect(fill = "white"), 
+                    strip.text =  element_blank(), 
+                    axis.text.x = element_blank(), 
+                    axis.ticks.x = element_blank(), 
+                    axis.text.y = element_blank(), 
+                    axis.ticks.y = element_blank(),
+                    panel.grid.major = element_blank(),
+      panel.grid.minor = element_blank(),
+                    title = element_text(size=11)),list(i = counter)))
+    return(p)
+}
+
+gg_replicate_fitness_correlations_bw <- function(table_subset, mapping, ...){
+  p<-eval(substitute( ggpairs(table_subset,
+            #diag=list("continuous" = function(data, mapping, ...){ggally_text(rlang::as_label(mapping$x),col="black", size=5)}),
+            diag=list("continuous" = function(data, mapping, ...){ggally_text("",col="black", size=5)}),
+            lower=list(continuous=my_fn_bw), method = "spearman",
+            upper = list(continuous = wrap("cor",method = "spearman", size=5))) +
+              ggtitle(libraries_names[counter]) + 
+              theme_classic(base_size = 14)+ 
+              theme(legend.position = "none", 
+                    strip.background = element_rect(fill = "white"), 
+                    strip.text =  element_blank(), 
+                    axis.text.x = element_blank(), 
+                    axis.ticks.x = element_blank(), 
+                    axis.text.y = element_blank(), 
+                    axis.ticks.y = element_blank(), 
+                    title = element_text(size=11)),list(i = counter)))
+    return(p)
+}
+
+my_fn <- function(data, mapping, ...){
+  p <- ggplot(data = data, mapping = mapping) + 
+    geom_pointdensity()+scale_color_viridis(option="magma")+
+    geom_smooth(method = "lm", se = FALSE, color="black", linetype="dashed")
+  p
+}
+
+my_fn_cor <- function(data, mapping, ...){
+  p <- ggplot(data = data, mapping = mapping) + 
+    geom_text(cor())+
+    geom_smooth(method = "lm", se = FALSE, color="black", linetype="dashed")
+  p
+}
+
+my_fn_bw <- function(data, mapping, ...){
+  p <- ggplot(data = data, mapping = mapping) + 
+    geom_pointdensity(alpha=0.7) + scale_color_gradient2(low="grey50", high="black")+
+    geom_smooth(method = "lm", se = FALSE, color="black", linetype="dashed")
+  p
+}
+
+
+gg_fitness_distributions<-function(all_variants, libraries_names, counter){
+  p<-ggplot(all_variants[all_variants$category!="WT",], aes(x=fitness, color=category)) +
+    geom_density(alpha=0.2, size=2)+
+    geom_vline(aes(xintercept=all_variants[WT==T,][1]$fitness, colour="wild type"), size=2) +
+    theme_classic(base_size = 16) + 
+    scale_colour_manual(values = c("blue", "red", "green3", "black"))+ 
+    #scale_fill_manual(values = c("blue", "red", "green3", "black"))+ 
+    theme(legend.position = "right")+ 
+    ggtitle(gsub(" binding", "\nbinding", gsub(" with", "", libraries_names[counter],)))+
+    theme(plot.title = element_text(size = 11), legend.text = element_text(size=10, 
+                                     face="bold"))
+  return(p)
+}
+
+
+gg_mochi_observed_vs_predicted<-function(predicted_phenotypes, column){
+  p<-ggplot(predicted_phenotypes[predicted_phenotypes[column]==1,],(aes(y=observed_fitness, x=predicted_fitness)))+
+    geom_pointdensity() + 
+    scale_colour_gradient(low = "gray96", high = "black")+
+    stat_regline_equation(label.y = 0.30, aes(label = ..rr.label..), size = 5, fontface="bold", color="firebrick3")+ 
+    ylim(c(-1.6, 0.6))+ 
+    xlim(c(-1.6, 0.6))+
+    xlab("predicted fitness")+
+    ylab("observed fitness")+
+    theme_classic(base_size = 13)+
+    geom_smooth(method = "lm", se = FALSE, color="firebrick3", linetype="dashed")+
+    ggtitle(gsub(" binding", "\nbinding",  gsub(" with", "", libraries_names[counter]))) +
+    coord_fixed(ratio = 1)
+  return(p)
+}
+
+
+gg_mochi_observed_vs_predicted_blocks<-function(predicted_phenotypes, column){
+  variable_plot<-colnames(predicted_phenotypes)[column]
+  
+  p<-ggplot(predicted_phenotypes[predicted_phenotypes$column!=0,],(aes(y=observed_fitness, x=predicted_fitness, color=get(variable_plot))))+
+    geom_point(alpha=0.05) + 
+    #scale_colour_gradient(low = "gray96", high = "black")+
+    stat_regline_equation( aes(label = ..rr.label..), size = 9, fontface="bold")+ 
+    ylim(c(-1.6, 0.6))+ 
+    xlim(c(-1.6, 0.6))+
+    xlab("predicted fitness")+
+    ylab("observed fitness")+
+    theme_classic(base_size = 13)+
+    geom_smooth(method = "lm", se = FALSE, color="black", linetype="dashed")+
+    ggtitle(gsub(" binding", "\nbinding",  gsub(" with", "", libraries_names[counter]))) +
+    #coord_fixed(ratio = 1) + 
+    guides(color=guide_legend(title="block"))
+  return(p)
+}
+
+
+
+
+
+gg_mochi_additive_model<-function(predicted_phenotypes, libraries, library_){
+  p<-ggplot(predicted_phenotypes[predicted_phenotypes$Abundance==1,],(aes(y=observed_fitness, x=additive_trait)))+
+    geom_pointdensity() + 
+    scale_colour_gradient(low = "grey96", high = "black")+
+    theme_classic(base_size = 13) +
+    geom_line(aes(x=additive_trait, y=predicted_fitness), color="firebrick3", linewidth=1)+
+    ggtitle(libraries_names[which(libraries==library_)]) +theme(plot.title = element_text(size=15))
+  return(p)
+}
+
+
+gg_heatmap_fitness_alignment<-function(singles_table_medians_complete, libraries_colors,libraries_order, counter){
+  p<-ggplot(singles_table_medians_complete[!is.na(library)],aes(x=as.factor(structural_alignment_pos), y=lib_name))+
+    xlab("structural alignment position")+
+    ylab("")+
+    geom_tile(aes(fill=median_fitness_norm))+ theme_classic(base_size = 16)+
+    scale_x_discrete(limits=as.factor(c(1:129)), breaks=seq(1,129,3))+
+    scale_y_discrete(limits=libraries_order)+
+    scale_fill_gradient2("Median fitness\nnormalized",low="red",mid="grey91",high="blue",midpoint=0, na.value = "grey50")+
+    theme( plot.title = element_text(size=35))+
+    theme( panel.spacing.x = unit(0.1, "lines"), 
+           #axis.text.x = element_blank(), 
+           axis.ticks.x = element_blank(), 
+           panel.grid.minor = element_blank(), 
+           axis.text.y = element_text(size=20, color=libraries_colors, face="bold"), 
+           plot.margin = unit(c(1, 0,0,0), "cm"),
+           legend.text = element_text(size=15), 
+           legend.title =  element_text(size=20)) + 
+    geom_text(size=5, aes(label = WT_aa))
+  return(p)
+}
+
+crop_heatmap_structure_shape<-function(path_image, path_shape, out_path){
+  img <- image_trim(image_read(path_image))
+  shape <- image_trim(image_read(path_shape))
+
+  bitmap_img<-img[[1]]
+  shape <-image_scale(shape, dim(bitmap_img)[2])
+  
+  bitmap<-shape[[1]]
+  bitmap_img_new<-copy(bitmap)
+  
+  for(x in 1:dim(bitmap)[2]){
+    for(y in 1:dim(bitmap)[3]){
+      if (bitmap[4,x,y]!="00"){
+        #print(bitmap[4,x,y])
+        #it means it is not background
+        bitmap_img_new[1,x,y]<-bitmap_img[1,x,y+16]
+        bitmap_img_new[2,x,y]<-bitmap_img[2,x,y+16]
+        bitmap_img_new[3,x,y]<-bitmap_img[3,x,y+16]
+        bitmap_img_new[4,x,y]<-bitmap_img[4,x,y+16]
+      }
+    }
+  }
+ 
+  bitmap_img_new<-image_read(bitmap_img_new)
+  image_write(bitmap_img_new, path = out_path, format = "png", quality=100)
+}
+
+crop_heatmap_structure_shape_original<-function(path_image, path_shape, out_path){
+  img <- image_trim(image_read(path_image))
+  shape <- image_trim(image_read(path_shape))
+  bitmap_img<-img[[1]]
+  shape<-image_scale(shape, dim(bitmap_img)[2])
+  bitmap<-shape[[1]]
+  bitmap_img_new<-bitmap
+  for(x in 1:dim(bitmap)[2]){
+    for(y in 1:dim(bitmap)[3]){
+      if (bitmap[4,x,y]!="00"){
+        #it means it is not background
+        bitmap_img_new[1,x,y]<-bitmap_img[1,x,y+3]
+        bitmap_img_new[2,x,y]<-bitmap_img[2,x,y+3]
+        bitmap_img_new[3,x,y]<-bitmap_img[3,x,y+3]
+        bitmap_img_new[4,x,y]<-bitmap_img[4,x,y+3]
+      }
+    }
+  }
+  bitmap_img_new<-image_read(bitmap_img_new)
+  image_write(bitmap_img_new, path = out_path, format = "png", quality=100)
+}
+
+
+crop_heatmap_structure_shape_outline<-function(path_image, path_shape, out_path){
+  img <- image_trim(image_read(path_image))
+  shape <- image_trim(image_read(path_shape))
+  
+  #image_background(shape, color = "#cbe7ff")
+  
+  bitmap_img<-img[[1]]
+  
+  shape <-image_scale(shape, dim(bitmap_img)[2])
+  test_black_<-image_background(shape,  color="black")
+  shape<-image_border(shape, geometry="0x10", color="transparent")
+  
+  bitmap<-shape[[1]]
+  bitmap_img_new<-shape[[1]]
+  test_black_<-test_black_[[1]]
+  
+  for(x in 1:dim(bitmap)[2]){
+    for(y in 1:dim(bitmap)[3]){
+      
+      if(bitmap[4,x,y]=="00") {
+        #print(bitmap[4,x,y])
+        if(x>4 & y>4 & x<dim(bitmap)[2]-4 & y<dim(bitmap)[3]-4){
+          if(any(bitmap[4,c((x-4):(x+4)),c((y-4):(y+4))]!="00")){
+              #print("drawing black")
+            bitmap_img_new[1,x,y]<-test_black_[1,1,1]
+            bitmap_img_new[2,x,y]<-test_black_[2,1,1]
+            bitmap_img_new[3,x,y]<-test_black_[3,1,1]
+            bitmap_img_new[4,x,y]<-test_black_[4,1,1]
+            }
+        }
+        else{
+          
+        }
+      }
+      
+      if(bitmap[4,x,y]!="00"){
+        #print(bitmap[4,x,y])
+        #it means it is not background
+        bitmap_img_new[1,x,y]<-bitmap_img[1,x,y+18]
+        bitmap_img_new[2,x,y]<-bitmap_img[2,x,y+18]
+        bitmap_img_new[3,x,y]<-bitmap_img[3,x,y+18]
+        bitmap_img_new[4,x,y]<-bitmap_img[4,x,y+18]
+      }
+        
+      }
+    }
+  
+  bitmap_img_new<-image_read(bitmap_img_new)
+  image_write(bitmap_img_new, path = out_path, format = "png", quality=100)
+}
+
+
+gg_heatmap_fitness_norm<-function(singles_table, aa_order, colors_aa, libraries_names, counter, alignment_length){
+  p<-ggplot(singles_table,aes(x=as.factor(Pos), y=Mut))+
+    xlab("aa position")+
+    ylab("")+
+    geom_tile(aes(fill=fitness_norm))+ theme_classic(base_size = 16)+
+    scale_x_discrete(breaks = seq(1,max(singles_table$Pos, na.rm = T), 3),limits = seq(1,max(singles_table$Pos, na.rm = T), 1)) +
+    scale_fill_gradient2("Fitness\nnormalized", low="red",mid="grey91",high="blue",midpoint=0, na.value = "grey50",, limits=c(-2.5,1), oob=squish)+
+    labs(fill = "Fitness\nnormalized")+
+    scale_y_discrete(limits=aa_order)+
+    theme( panel.spacing.x = unit(0.1, "lines"), 
+           plot.title = element_text(size=27),
+           axis.text.x = element_text(angle=90, vjust=0.5), 
+           panel.grid.minor = element_blank(), 
+           axis.text.y = element_text(size=15, color=colors_aa, face="bold"), 
+           plot.margin = unit(c(1, 0,0,0), "cm"),
+           legend.text = element_text(size=15), 
+           legend.title =  element_text(size=20)) + 
+    ggtitle(paste0("singles fitness heatmap ", libraries_names[counter])) + 
+    geom_text(data = singles_table, size=10, aes(x=as.factor(Pos), y=WT_aa, label = "-"))
+  return(p)
+}
+
+gg_heatmap_fitness_norm_compressed<-function(singles_table, aa_order, colors_aa, libraries_names, counter, alignment_length){
+  p<-ggplot(singles_table,aes(x=as.factor(Pos), y=Mut))+
+    ylab("")+
+    geom_tile(aes(fill=fitness_norm))+ theme_classic(base_size = 16)+
+    scale_x_discrete(breaks = seq(1,max(singles_table$Pos, na.rm = T), 3),limits = seq(1,max(singles_table$Pos, na.rm = T), 1)) +
+    scale_fill_gradient2("Fitness\nnormalized", low="red",mid="grey91",high="blue",midpoint=0, na.value = "grey50",, limits=c(-2.5,1), oob=squish)+
+    labs(fill = "Fitness\nnormalized")+
+    scale_y_discrete(limits=aa_order)+
+    theme( panel.spacing.x = unit(0.1, "lines"), 
+           plot.title = element_text(size=15),
+           axis.text.x = element_text(angle=90, vjust=0.5, size=5),
+           axis.title.x = element_blank(),
+           panel.grid.minor = element_blank(), 
+           axis.text.y = element_text(size=8, color=colors_aa, face="bold"), 
+           plot.margin = unit(c(1, 0,0,0), "cm"),
+           legend.text = element_text(size=8), 
+           legend.title =  element_text(size=10),
+           legend.position = "top",
+           legend.key.height= unit(0.5, 'cm'),
+        legend.key.width= unit(0.7, 'cm')) + 
+    ggtitle(paste0("singles fitness heatmap ", libraries_names[counter])) + 
+    geom_text(data = singles_table, size=10, aes(x=as.factor(Pos), y=WT_aa, label = "-"))
+  return(p)
+}
+
+
+
+gg_ddg_heatmap<-function(all_ddg_table_subset, aa_order, colors_aa, title){
+  p<-ggplot(all_ddg_table_subset,aes(x=Pos, y=Mut))+
+    xlab("")+ 
+    ylab("")+
+    geom_tile(aes(fill=ddg))+ theme_test(base_size = 16)+
+    scale_fill_gradient2(low="blue",mid="grey91",high="red",midpoint=0, na.value = "grey50", limits=c(-2.493372, 4.247175))+
+    scale_x_discrete(limits=seq(min(all_ddg_table_subset$Pos, na.rm = T),max(all_ddg_table_subset$Pos, na.rm = T), 1), breaks=seq(min(all_ddg_table_subset$Pos, na.rm = T)+5,max(all_ddg_table_subset$Pos, na.rm = T), 5))+
+    scale_y_discrete(limits=aa_order)+
+    theme( plot.title = element_text(size=20))+
+    theme( panel.spacing.x = unit(0.1, "lines"), 
+           #axis.text.x = element_text(size=15), #angle=90, vjust=0.5,
+           panel.grid.minor = element_blank(), 
+           #axis.text.x = element_text(size=13, color=colors_aa, face="bold"),
+           axis.text.y = element_text(size=13, color=colors_aa, face="bold"), 
+           plot.margin = unit(c(0, 0, 0, 0), "cm"),
+           legend.text = element_text(size=15), 
+           legend.title =  element_text(size=20)) + 
+    ggtitle(title) + 
+    geom_text(data = all_ddg_table_subset, size=10, aes(x=Pos, y=WT_aa, label = "-")) +
+  theme(panel.spacing.x=unit(0.5, "lines"),panel.spacing.y=unit(1, "lines"))
+  return(p)
+}
+
+
+
+gg_heatmap_ddg_per_position<-function(ddg_table, aa_order2, colors_aa){
+  p<-ggplot(ddg_table,aes(x=as.factor(library), y=mutation))+
+  facet_wrap(.~alignment_pos, nrow=2, scales = "free_x")+
+    xlab("")+ 
+    ylab("")+
+    geom_tile(aes(fill=ddg))+ theme_test(base_size = 16)+
+    scale_fill_gradient2(low="blue",mid="grey91",high="red",midpoint=0, na.value = "grey50")+
+    scale_y_discrete(limits=aa_order2)+
+    theme( plot.title = element_text(size=20))+
+    theme( panel.spacing.x = unit(0.1, "lines"), 
+           axis.text.x = element_text(angle=90), 
+           axis.ticks.x = element_blank(), 
+           panel.grid.minor = element_blank(), 
+           axis.text.y = element_text(size=20, color=colors_aa, face="bold"), 
+           plot.margin = unit(c(0, 0, 0, 0), "cm"),
+           legend.text = element_text(size=15), 
+           legend.title =  element_text(size=20)) + 
+    #ggtitle(t) + 
+    geom_text(data = ddg_table, size=10, aes(x=as.factor(library), y=WT_aa, label = "-")) +
+  theme(panel.spacing.x=unit(0.5, "lines"),panel.spacing.y=unit(1, "lines"))
+  return(p)
+}
+
+gg_correlation_homolog_positions<-function(df1, df2, wt1, wt2, lib1, lib2, position, c){
+  ddg1<-df1[alignment_pos==position]
+  ddg2<-df2[alignment_pos==position]
+  both<-left_join(ddg1, ddg2, by="mutation")
+  plt<-ggplot()+
+    geom_point(aes(x=both$ddg.x, y=both$ddg.y), color=c)+ 
+    theme_light()+
+    xlab(paste(unique(wt1), position, lib1 )) + 
+    ylab(paste(unique(wt2), position, lib2 )) + 
+    geom_hline(yintercept=0)+
+    geom_vline(xintercept=0) +
+    coord_fixed(ratio = 1, xlim = c(-0.6, 2.5), ylim = c(-0.6, 2.5))
+  
+  return(plt)
+}
+
+
+gg_ddgdistr_position<-function(both_all, pos, lib, results_dir, limit){
+ggplot(both_all[both_all$alignment_pos==pos])+ geom_point(aes(x=library, y=ddg)) + 
+  theme_classic() + xlab(paste("position", pos)) + ylab("∆∆G Binding")+
+  theme(axis.text.x=element_blank()) + geom_hline(yintercept = 0, color="grey", linetype="dashed") + 
+  geom_text_repel(data=subset(both_all[both_all$alignment_pos==pos], ddg<limit), aes(x=library, y=ddg, label=mutation), color="blue", max.overlaps = 20) +
+  ylim(c(-0.7, 1))
+ggsave(paste0(results_dir, paste0("position",pos, "_", lib, ".png")), width=2, height=3)
+}
+
+gg_alignment_heatmap<-function(ddg_table, yname, plotting_variable_name ){
+  p<-ggplot(ddg_table, aes(x = as.factor(alignment_pos), y = library, fill = ddg, label=WT_aa)) +
+  geom_tile() +
+  geom_tile(data=table_subset, aes(color=distance), fill="transparent", size=0.7)+
+  theme_linedraw(base_size = 14) +
+  geom_text(color="black") +  scale_color_manual(values=c("transparent", "black", "grey60"), name="distance to\nligand (A)")+
+  scale_fill_gradient2(low="blue", high="red", 
+                       mid="white",na.value="grey50", name=plotting_variable_name, midpoint=0) +
+  theme(legend.position = "top", legend.key.width = unit(1, "cm"))+
+  theme(axis.text.x=element_text(angle=0,vjust =0.2))+
+  theme( panel.border = element_rect(colour = "white", fill=NA, size=0), panel.grid.minor = element_blank()) + 
+    ylab(yname) + 
+    xlab("alignment_position") 
+  
+  return(p)
+}
+
+
+gg_structural_alignment_heatmap<-function(ddg_table, yname, plotting_variable_name){
+  p<-ggplot(ddg_table, aes(x = as.factor(structural_alignment_pos), y = factor(name))) +
+  geom_tile(aes(fill = weighted_mean_ddg)) +
+  geom_tile(data=ddg_table, aes(color=binding_interface_5A), fill="transparent", size=0.7)+
+    scale_color_manual("binding\ninterface", values=c("transparent", "black"))+
+  theme_linedraw(base_size = 14) +
+  geom_text(aes(label=WT_aa), color="black") +  
+    scale_x_discrete(limits=c(1:max(ddg_table$structural_alignment_pos)),breaks=seq(5,max(ddg_table$structural_alignment_pos), 5))+
+    #scale_color_manual(values=c("transparent", "black", "grey60"), name="distance to\nligand (A)")+
+  scale_fill_gradient2(low="blue", high="red", 
+                       mid="white",na.value="grey50", name=plotting_variable_name, midpoint=0) +
+  
+    theme(legend.position = "top", axis.title.x = element_blank())
+  theme( panel.border = element_rect(colour = "white", fill=NA, size=0), panel.grid.minor = element_blank()) + 
+    theme_classic()+
+    ylab(yname) 
+  
+  return(p)
+}
+gg_structural_alignment_heatmap_folding<-function(ddg_table, yname, plotting_variable_name){
+  p<-ggplot(ddg_table, aes(x = as.factor(structural_alignment_pos), y = factor(name))) +
+  geom_tile(aes(fill = weighted_mean_ddg)) +
+  #geom_tile(data=ddg_table, aes(color=binding_interface_5A), fill="transparent", size=0.7)+
+  #  scale_color_manual("binding\ninterface", values=c("transparent", "black"))+
+  theme_linedraw(base_size = 14) +
+  geom_text(aes(label=WT_aa), color="black") +  
+    scale_x_discrete(limits=c(1:max(ddg_table$structural_alignment_pos)),breaks=seq(5,max(ddg_table$structural_alignment_pos), 5))+
+    #scale_color_manual(values=c("transparent", "black", "grey60"), name="distance to\nligand (A)")+
+  scale_fill_gradient2(low="blue", high="red", 
+                       mid="white",na.value="grey50", name=plotting_variable_name, midpoint=0) +
+  
+    theme(legend.position = "top", axis.title.x = element_blank())
+  theme( panel.border = element_rect(colour = "white", fill=NA, size=0), panel.grid.minor = element_blank()) + 
+    theme_classic()+
+    ylab(yname) 
+  
+  return(p)
+}
+
+gg_alignment_heatmap_ligand<-function(ddg_table, yname, plotting_variable_name ){
+  p<-ggplot(ddg_table, aes(x = as.factor(alignment_pos), y = library, fill = ddg, label=WT_aa)) +
+  geom_tile() +
+  geom_tile(data=table_subset, aes(color=distance), fill="transparent", size=0.7)+
+  theme_linedraw(base_size = 14) +
+  geom_text(color="black") +  scale_color_manual(values=c("transparent", "black", "grey60"), name="distance to\nligand (A)")+
+  scale_fill_gradient2(low="blue", high="red", 
+                       mid="white",na.value="grey50", name=plotting_variable_name, midpoint=0) +
+  theme(legend.position = "right", legend.key.width = unit(1, "cm"))+
+  theme(axis.text.x=element_text(angle=0,vjust =0.2))+
+  theme(axis.text.y = element_blank(),  panel.border = element_rect(colour = "white", fill=NA, size=0), panel.grid.minor = element_blank()) + 
+    ylab("") + 
+    xlab("alignment_position") 
+  
+  p2<-ggplot(table_subset, aes(x = as.factor(1), y = library, fill = ligand))+geom_tile(color="white")+theme_classic()+theme(legend.position = "none")+
+    theme(axis.text.x=element_blank(), axis.ticks.x = element_blank(), axis.text.y = element_text( vjust = 0.5, hjust=1, size=8))+xlab("")+ylab("")
+  
+  p<-plot_grid(p2, p ,ncol = 2, nrow = 1,  align = "hv", rel_widths=c(2, 10))
+  return(p)
+}
+
+```
+
+
+
+
+
+
+# save environmental variables for next scripts
+```{r}
+save.image(file='source_variables.RData')
+#load('source_variables.RData')
+```
+

@@ -1,0 +1,653 @@
+---
+title: "PDZ Binding interfaces"
+author: "Aina Martí-Aranda"
+date: "June 2025"
+output:
+  html_document:
+    toc: true
+    theme: cerulean
+    toc_float: true
+    toc_collapsed: true
+---
+
+
+# initializing
+```{r setup}
+base_dir<-"/Users/aa33/Library/CloudStorage/OneDrive-WellcomeSangerInstitute/001-Projects/03-PDZ_Homologs/02-DryLab/001-data_analysis/data_analysis_github/"
+knitr::opts_knit$set(root.dir = base_dir)
+setwd(base_dir)
+
+# load some variables
+load('source_variables.RData')
+```
+
+## libraries used for the analysis
+```{r message=FALSE, warning=FALSE}
+library(car)
+library(systemfonts)
+library(plyr)
+library(ggiraph)
+library(ggiraphExtra)
+library(rstatix)
+library(data.table)
+library(dplyr)
+library(seqinr)
+library(stringr)
+library(ggplot2)
+library(Matrix)
+library(viridis)
+library(ggpubr)
+library(readxl)
+library(stringi)
+library(GGally)
+library(readxl)
+library(modelr)
+library(cowplot)
+library(Hmisc)
+library(ggrepel)
+library(dplyr) 
+library(ddpcr)
+library(ggpointdensity)
+library(tidyr)
+library(magick)
+library(ggpointdensity)
+library(ggpmisc)
+library(ggridges)
+```
+
+
+# load some tables
+```{r}
+all_ddg_table<-as.data.table(read.csv(paste0("tmp_tables/all_ddg_table.csv")))
+all_median_ddg_table<-as.data.table(read.csv(paste0("tmp_tables/all_median_ddg_table.csv")))
+pdb_metrics_dt<-as.data.table(read.csv("data/annotations/structure_metrics.csv", sep=" "))
+aln_table<-as.data.table(read.table(paste0("data/annotations/structural_alignment_tcoffee.csv")))
+get_contacts_dt<-as.data.table(read.csv("data/annotations/tmp_files/contacts_table_complete.csv", sep=","))
+```
+
+
+# preparing some variables
+```{r}
+#preparing some data
+all_ddg_table[is.na(binding_interface_contacts), binding_interface_contacts:=F]
+all_ddg_table[is.na(core_bi_contacts), core_bi_contacts:=F]
+
+all_median_ddg_table[is.na(binding_interface_contacts), binding_interface_contacts:=F]
+all_median_ddg_table[is.na(core_bi_contacts), core_bi_contacts:=F]
+
+#prepare binding tables
+all_ddg_table_binding<-all_ddg_table[assay=="binding"]
+all_median_ddg_table_binding<-all_median_ddg_table[assay=="binding"]
+
+#list all + common binding interface positions
+all_bi<-unique(all_ddg_table_binding[ binding_interface_contacts==T]$structural_alignment_pos)
+core_bi<-unique(all_ddg_table_binding[core_bi_contacts==T]$structural_alignment_pos)
+
+# saving this lists
+save(all_bi, file = paste0("tmp_tables/all_bi.Rdata"))
+save(core_bi, file = paste0("tmp_tables/core_bi.Rdata"))
+
+#classify these positions
+all_ddg_table_binding[,class_BI:="outside_BI"]
+all_ddg_table_binding[structural_alignment_pos %in% all_bi,class_BI:="some_BI, contact"]
+all_ddg_table_binding[structural_alignment_pos %in% all_bi & binding_interface_contacts==F,class_BI:="some_BI, NOcontact"]
+all_ddg_table_binding[structural_alignment_pos %in% core_bi,class_BI:="core_BI"]
+```
+
+
+# Fig 3.a: BI distribution of effects
+
+```{r}
+all_ddg_table_binding$lib_name<-lib_code_to_name(all_ddg_table_binding$library, libraries_binding_names, libraries_names_plots[which(libraries %in% libraries_binding)])
+all_ddg_table_binding$lib_name<-gsub(" binding ", "\n", all_ddg_table_binding$lib_name)
+all_ddg_table_binding$lib_name<-gsub("_", "-", all_ddg_table_binding$lib_name)
+
+p<-ggplot(all_ddg_table_binding[structural_alignment_pos %in% all_bi], aes(x=ddg))+
+  #geom_density(scale="width", size=1, aes(color=library))+#color="grey30", fill="grey80",
+  theme_classic()+
+  xlab("∆∆Gb in binding\ninterface positions")+
+  theme(#legend.key.size = unit(0.3, 'cm'),
+        #legend.text = element_text(size=7),
+        legend.position = "none",
+        axis.title.x=element_blank(),
+        axis.text.x=element_text(angle=90, vjust=0.5, hjust = 1, size=7))+
+  xlim(c(-1.5,3))+
+  #scale_color_brewer(palette="Set2")+
+  #scale_fill_brewer(palette="Set2")+
+  geom_density_ridges2(aes(y=lib_name), scale = 1.3, alpha=0.8, fill="grey80", color="grey50")+coord_flip()
+
+p+theme(axis.text.x=element_text(size=9,face="bold", color="black"), 
+        axis.text.y=element_text(size=13,face="bold", color="black"),
+        axis.title.y=element_text(size=10,face="bold", color="black"))
+ggsave(paste0("Figs/Fig3/Fig3AddGb_distribution_BI.png"), width=6, height=3)
+```
+
+## Identify hotspots
+Defining hotspots as residues where mutations cause changes in binding energy larger than the median of all interface residues (0.75 kcal/mol)
+```{r, fig.width=10, fig.height=10}
+# all candidate positions
+plot_dt<-all_ddg_table_binding[binding_interface_contacts==T]
+summary(plot_dt$ddg,na.rm = T)
+
+# Calculate the median of all BI residues
+median_BI <- median(all_ddg_table_binding[binding_interface_contacts == T]$ddg, na.rm = TRUE)
+
+# Filter groups with at least 2 observations
+filtered_data <- plot_dt[, 
+  .N, by = .(library, structural_alignment_pos)][N >= 2]
+
+# Merge the filtered groups back with the original data
+valid_data <- plot_dt[library %in% filtered_data$library &  structural_alignment_pos %in% filtered_data$structural_alignment_pos,]
+
+
+# Perform the t-test only for valid groups
+test_results <- valid_data[
+  !is.na(ddg),  # Ensure ddg is not NA
+  .(
+    p_value = if (.N > 1 && length(unique(ddg)) > 1) {
+      t.test(ddg, mu = median_BI, alternative = "greater")$p.value
+    } else {
+      NA_real_  # Use numeric NA for consistency
+    }
+  ),
+  by = .(library, structural_alignment_pos)
+]
+
+test_results[, p_adjusted := p.adjust(p_value, method = "fdr")]
+significant_distributions<-test_results[p_adjusted<0.1] # save the significant ones in a new distribution
+significant_distributions[,significant:=T]
+plot_dt<-left_join(plot_dt, significant_distributions)
+
+# CONSERVED binding interface hotspots
+# define the conserved binding interface hotspots those with >=4 libraries significantly above the median
+BI_hotspots<-significant_distributions[significant==T, .N, by=c("structural_alignment_pos")][N>=4]$structural_alignment_pos
+save(BI_hotspots, file = paste0("tmp_tables/BI_hotspots.Rdata"))
+
+# Add a new column to label significant facets
+all_ddg_table_binding[, highlight := ifelse(structural_alignment_pos %in% BI_hotspots, "highlight", "normal")]
+
+plot_dt[is.na(significant), significant:=F]
+plot_dt[, BI_consv_hotspot:=(structural_alignment_pos %in% BI_hotspots)]
+BI_hotspots_dt<-plot_dt
+fwrite(BI_hotspots_dt, paste0("tmp_tables/BI_hotspots_dt.csv"))
+
+# prepare library names annotations
+plot_dt$lib_name<-lib_code_to_name(plot_dt$library, libraries_binding_names, libraries_names_plots[which(libraries %in% libraries_binding)])
+plot_dt$lib_name<-gsub(" binding ", " | ", plot_dt$lib_name)
+plot_dt$lib_name<-gsub("_", "-", plot_dt$lib_name)
+
+# annotate secondary structure labels
+plot_dt[, region:=""]
+plot_dt[structural_alignment_pos %in% seq(24,30), region:="β2"]
+plot_dt[structural_alignment_pos %in% c(24,25,26), region:="carboxylate binding loop"]
+plot_dt[structural_alignment_pos %in% seq(30,45), region:="β2-β3 loop"]
+plot_dt[structural_alignment_pos %in% seq(46,52), region:="β3"]
+plot_dt[structural_alignment_pos %in% seq(82,91), region:="α3"]
+plot_dt[, region:=structural_alignment_pos]
+
+
+
+p<-ggplot(plot_dt)+
+  geom_hline(aes(yintercept = median(plot_dt$ddg,na.rm = T)), color="red3")+
+  geom_hline(aes(yintercept = 0), color="grey", linetype="dashed")+
+  geom_boxplot(aes(x=factor(structural_alignment_pos), y=ddg, fill=lib_name, color=significant))+
+  scale_fill_brewer(palette="Set2")+
+  theme_pubr()+
+  scale_color_manual("Fdr<0.1",values=c("grey80", "black"))+
+  #facet_grid(rows = vars(region), cols = vars(factor(structural_alignment_pos)), scales = "free_x")+
+  facet_wrap(~region+factor(structural_alignment_pos), scales="free_x", ncol=7)+#, ncol=13)+
+  theme(axis.text.x=element_blank(),
+        axis.ticks.x =element_blank(),
+        legend.position="right",
+    strip.text = element_text(
+      color="black",
+      size = 10,
+      face = "bold"
+    )
+  ) +ylab("∆∆G")+xlab("")#+
+  #geom_point(data=plot_dt[BI_consv_hotspot==T,], aes(x=1, y=4), shape=23, size=3.5, fill="#FF7013")+xlab("")+ylab("∆∆Gb")
+
+fwrite(plot_dt, paste0("tmp_tables/BI_hotspots_dt.csv"))
+
+p+theme(legend.position="none")
+ggsave(paste0("Figs/Fig3/Fig3Bdefine_hotspots.png"), width=10, height=10)
+
+
+```
+
+
+# percentage of hotspots per interaction
+A median of six hotspots per interface (false discovery rate (FDR, Benjamini-Hochberg method) < 0.1, one-sided t-test). This is a median of 41.7% of interface residues (range 29.4% to 61.5% Fig. 3b).
+```{r}
+BI_hotspots_dt_<-BI_hotspots_dt[, .(significant=significant[1]), by=.(structural_alignment_pos, library)]
+BI_hotspots_dt_[,pdz:=sub("^(([^_]+)_([^_]+))_.*", "\\1", library)]
+BI_hotspots_dt_counts_<-BI_hotspots_dt_[, .(.N, N_sign=sum(significant)), by=.(library)]
+BI_hotspots_dt_counts_[,percentage:=N_sign/N*100]
+summary(BI_hotspots_dt_counts_$percentage)
+```
+
+
+
+Only two residues are hotspots in all seven interactions (structural alignment positions 25 in the carboxylate binding loop, and 86 in the α2 helix), and an additional four are conserved in more than half of the interactions (positions 24 in the carboxylate binding loop, 26 and 28 in β2, and 82 in α2, Fig. 3b,c,d).
+```{r}
+BI_hotspots_dt_<-BI_hotspots_dt[, .(significant=significant[1]), by=.(structural_alignment_pos, library)]
+BI_hotspots_dt_[,pdz:=sub("^(([^_]+)_([^_]+))_.*", "\\1", library)]
+BI_hotspots_dt_libraries<-BI_hotspots_dt_[, .(N=.N, num_hotspots=sum(significant)), by=.(structural_alignment_pos)]
+BI_hotspots_dt_pdz<-BI_hotspots_dt_[significant==T, .(num_pdzs=length(unique(pdz))), by=.(structural_alignment_pos)]
+BI_hotspots_dt_libraries[num_hotspots==7] # which are hotspots in all interactions
+BI_hotspots_dt_pdz[num_pdzs==5] # which are hotspots in all 5 PDZs
+BI_hotspots_dt_pdz[num_pdzs>=3] # which are hotspots in half of the PDZs
+```
+A total of 15 interface residues are never classified as hotspots, including eight (positions 23, 29, 32, 34, 41, 50, 83, and 90) that make contacts with a ligand in multiple PDZ domains (Fig. 3b, extended Data Fig. 3a,c). 
+```{r}
+#never classified as hotspots
+BI_hotspots_dt_[, .(num_pdzs=sum(significant)), by=.(structural_alignment_pos)][num_pdzs==0]
+
+# never classified as hotspots when interacting in several PDZs
+BI_hotspots_dt_[, pdz:=sub("^(([^_]+)_([^_]+))_.*", "\\1", library)]
+BI_hotspots_dt_[, .(num_pdzs=sum(significant), total_contacts_pdzs=length(unique(pdz))), by=.(structural_alignment_pos)][num_pdzs==0 & total_contacts_pdzs>1][order(structural_alignment_pos)]
+```
+
+
+
+plot all the counts
+```{r warning=FALSE, fig.width=3, fig.height=3}
+# now I add the ones that are 0
+BI_hotspots_dt_none_sign<-BI_hotspots_dt_[, .(num_pdzs=sum(significant)), by=.(structural_alignment_pos)][num_pdzs==0]
+BI_hotspots_dt_pdz<-rbind(BI_hotspots_dt_pdz, BI_hotspots_dt_none_sign)
+BI_hotspots_dt_pdz<-rbind(BI_hotspots_dt_pdz, data.table(structural_alignment_pos=0, num_pdzs=2))
+
+ggplot(BI_hotspots_dt_pdz)+
+  geom_bar(aes(x=factor(num_pdzs, levels=c(0,1,2,3,4,5)), fill=factor(num_pdzs)), stat="count")+
+  #geom_bar(aes(x=factor(N_total), y=V1), stat="identity", bins=7, fill="black")+
+  scale_fill_manual(values=c("grey", "black","white", "brown1","brown1", "brown1", "brown1", "brown1"))+
+   ylab("Position count")+
+  #scale_fill_manual(values=c(rep("grey", 3), "red"))+
+  xlab("# PDZs with hotspot")+
+  theme_classic()+theme(legend.position="none")+
+  #scale_x_discrete(breaks=-1:5, limits=-1:5)+
+  theme(axis.text.x=element_text(size=10,face="bold", color="black"), 
+        axis.text.y=element_text(size=10,face="bold", color="black"),
+        axis.title.y=element_text(size=10,face="bold", color="black"),
+        axis.title.x=element_text(size=10,face="bold", color="black"))
+ggsave(paste0("Figs/Fig3/Fig3Clibraries_per_hotspot.png"), width=2.5, height=2.5)
+```
+
+
+# Position contacts of hotspots (histogram)
+Hotspots are enriched in contacts with ligand positions 0 or -2, the two aa positions used to define the three main classes of PDZ domain ligands (OR=13.71, P=2.61x10-7, one-sided Fisher’s Exact Test (FET) Fig. 3e)
+```{r}
+get_contacts_dt_aln_ligand<-get_contacts_dt[,Pos:=Pos_1][chain_2=="B" & chain_1=="A", .(lig_contacts=paste(Pos_2-9, collapse=",")), by=.(Pos, library)]
+
+BI_hotspots_dt_w_contacts<-left_join(get_contacts_dt_aln_ligand, BI_hotspots_dt[,.(significant=significant[1]) ,by=.(library, Pos, structural_alignment_pos)][,.(library, Pos, structural_alignment_pos, significant)])
+
+# all of the conserved residues conract position 0 and/or -2
+BI_hotspots_dt_w_contacts[significant==T & structural_alignment_pos %in% BI_hotspots]
+
+BI_hotspots_dt_w_contacts[, has_0_or_neg2 := grepl("(^|,)(-2|0)(,|$)", lig_contacts)]
+BI_hotspots_dt_w_contacts[, conserved_hotspot:=structural_alignment_pos %in% BI_hotspots]
+
+#enrichment of has_0_or_neg2 in overall hotspots
+fisher.test(table(BI_hotspots_dt_w_contacts$has_0_or_neg2, BI_hotspots_dt_w_contacts$significant), alternative = "greater" )
+```
+```{r}
+# plot the number of contacts
+BI_hotspots_dt_w_contacts[, hotspot_class:="non-Hotspot"]
+BI_hotspots_dt_w_contacts[significant==T, hotspot_class:="Hotspot"]
+BI_hotspots_dt_w_contacts[conserved_hotspot==T, hotspot_class:="Hotspot in >2/5 PDZs"]
+
+dt_expanded <- BI_hotspots_dt_w_contacts[, .(lig_pos = unlist(strsplit(lig_contacts, ","))), by = .(hotspot_class)]
+ligand_contact_counts <- dt_expanded[, .N, by = .(hotspot_class, lig_pos)][order(hotspot_class, lig_pos)]
+
+ggplot(ligand_contact_counts, aes(x=factor(as.numeric(lig_pos)), y=N, fill=hotspot_class))+
+  geom_bar(stat="identity")+
+  facet_wrap(~factor(hotspot_class, levels=c("Hotspot in >2/5 PDZs", "Hotspot", "non-Hotspot")), ncol=1)+
+  scale_x_discrete(limits = factor(c(0:-8)))+xlab("ligand position")+ylab("number of contacts")+
+  theme_classic()+
+  theme(legend.position = "none", strip.text = element_blank())+
+  scale_fill_manual(values=c("black", "brown1", "grey"))+
+  theme(axis.text.x=element_text(size=10,face="bold", color="black"), 
+        axis.text.y=element_text(size=10,face="bold", color="black"),
+        axis.title.y=element_text(size=10,face="bold", color="black"),
+        axis.title.x=element_text(size=10,face="bold", color="black"))
+ggsave(paste0("Figs/Fig3/Fig3Ehotspot_contacts.png"), width=3, height=3)
+```
+
+
+# conserved hotapots are highly conserved structural contacts
+The conserved hotspot positions also have higher sequence and structural conservation (Fig. 3f,g), and have highly conserved structural contacts, with five out of six positions contacting the ligand in all seven interactions (OR=60.54, P=5.3x10-04, one-sided FET).
+```{r}
+#enrichment in core_bi residues
+dt_tmp<-data.table(all_bi=all_bi)
+dt_tmp[all_bi %in% BI_hotspots, BI_hotspot:=T]
+dt_tmp[!all_bi %in% BI_hotspots, BI_hotspot:=F]
+dt_tmp[all_bi %in% core_bi, core_BI:=T]
+dt_tmp[!all_bi %in% core_bi, core_BI:=F]
+fisher.test(table(dt_tmp$core_BI, dt_tmp$BI_hotspot), alternative = "greater")
+```
+
+
+# conservarion in sequence
+The conserved hotspot positions also have higher sequence and structural conservation (Fig. 3f,g), and have highly conserved structural contacts, with five out of six positions contacting the ligand in all seven interactions (OR=60.54, P=5.3x10-04, one-sided FET).
+```{r, fig.width=4, fig.height=4}
+BI_hotspots_dt_tmp<-BI_hotspots_dt
+BI_hotspots_dt_tmp[, hotspot_class:="non-Hotspot"]
+BI_hotspots_dt_tmp[significant==T, hotspot_class:="Hotspot"]
+BI_hotspots_dt_tmp[BI_consv_hotspot==T, hotspot_class:="Hotspot in >2/5 PDZs"]
+BI_hotspots_dt_simple<-BI_hotspots_dt_tmp[, .(significant=significant[1], consv=consv[1], hotspot_class=hotspot_class[1]), by=.(library, structural_alignment_pos)]
+
+BI_hotspots_dt_simple<-BI_hotspots_dt_simple[,.(hotspot_class=hotspot_class[1], consv=consv[1]), by=.(structural_alignment_pos)]
+BI_hotspots_dt_simple[structural_alignment_pos %in% BI_hotspots_dt_simple, hotspot_class:="Hotspot in >2/5 PDZs"]
+BI_hotspots_dt_simple[structural_alignment_pos %in% BI_hotspots_dt_none_sign$structural_alignment_pos, hotspot_class:="non-Hotspot"]
+
+
+ggplot(BI_hotspots_dt_simple, aes(x=factor(hotspot_class, levels=c("Hotspot in >2/5 PDZs", "Hotspot", "non-Hotspot")), y=consv, fill=hotspot_class, color=hotspot_class))+
+  #geom_hline(aes(yintercept = 1), color="grey")+
+  #geom_hline(aes(yintercept = 0), color="grey")+
+  geom_violin(scale="width", alpha=0.7)+
+  scale_fill_manual(values=c("black", "brown1", "grey"))+
+  scale_color_manual(values=c("black", "brown1", "grey"))+
+  geom_point(position="jitter")+
+  geom_boxplot(width=0.2, fill="white", color="black", outliers=F)+
+  theme_classic()+
+  ylab("Sequence conservation score")+
+  theme(axis.text.x=element_blank(),
+        axis.ticks.x=element_blank(), axis.title.x=element_blank(), legend.position="none")+
+  stat_compare_means(comparisons = list(c("Hotspot in >2/5 PDZs", "Hotspot"), c("Hotspot", "non-Hotspot")), aes(label = after_stat(p.signif)))+
+  theme(axis.text.y=element_text(size=10,face="bold", color="black"),
+        axis.title.y=element_text(size=10,face="bold", color="black"))
+
+ggsave(paste0("Figs/Fig3/Fig3Fseq_consv_hotspots.png"), width=2.3, height=2.3)
+```
+
+
+
+# conservation in structure
+The conserved hotspot positions also have higher sequence and structural conservation (Fig. 3f,g), and have highly conserved structural contacts, with five out of six positions contacting the ligand in all seven interactions (OR=60.54, P=5.3x10-04, one-sided FET).  
+
+Here I have superimposed the structures using Matchmaker from ChimeraX,  
+And then manually computed the RMSD of the residue subsets of interest
+```{r warning=FALSE, fig.width=4, fig.height=4}
+#load models
+library(bio3d)
+model1 <- read.pdb(paste0("data/structures/superimposed/superimposed_dlg4_pdz3_cript.pdb.pdb"))
+model2 <- read.pdb(paste0("data/structures/superimposed/superimposed_dlg4_pdz2_cript.pdb.pdb"))
+model3 <- read.pdb(paste0( "data/structures/superimposed/superimposed_dlg4_pdz2_nmdar2a.pdb.pdb"))
+model4 <- read.pdb(paste0("data/structures/superimposed/superimposed_nhrf3_pdz2_cep164.pdb.pdb"))
+model5 <- read.pdb(paste0("data/structures/superimposed/superimposed_nhrf3_pdz1_dlgap.pdb.pdb"))
+model6 <- read.pdb(paste0("data/structures/superimposed/superimposed_nhrf3_pdz1_uhmk1.pdb.pdb"))
+model7 <- read.pdb(paste0("data/structures/superimposed/superimposed_erbin_pdz1_cript.pdb.pdb"))
+models<-list(model1, model2, model3, model4, model5, model6, model7)
+
+
+#define the function that will compute the local rmsd (actually local euclidean distances)
+calculate_local_rmsd <- function(model1, model2, pair) {
+  index1<-model1$atom$resno==pair[1] &  model1$atom$elety=="CA" & model1$atom$chain=="A"
+  index2<-model2$atom$resno==pair[2] &  model2$atom$elety=="CA" & model2$atom$chain=="A"
+  coord1 <- c(model1$atom$x[index1], model1$atom$y[index1], model1$atom$z[index1])
+  coord2 <- c(model2$atom$x[index2], model2$atom$y[index2], model2$atom$z[index2])
+   # Euclidean distance (squared differences summed)
+  rmsd <- sqrt(sum((coord1 - coord2)^2))   # Root Mean Square Deviation
+  return(rmsd)
+}
+
+# build the local (euclidean) distances between aligned residue's CA atoms
+combinations<-t(combn(1:7, 2))
+rmsd_comparisons<-data.table()
+for(i in 1:nrow(combinations)){
+  pair<-combinations[i,]
+  libraries_<-libraries_binding_names[pair]
+  model1<-models[pair[1]]
+  model2<-models[pair[2]]
+  
+  #paired positions
+  paired_dt<-t(reshape(all_median_ddg_table_binding[library %in% libraries_, c("structural_alignment_pos", "Pos", "library")], timevar="structural_alignment_pos", idvar="library", direction="wide"))
+  aln_positions<-as.numeric(lapply(strsplit(rownames(paired_dt[-1,]), "[.]"), "[[", 2))
+  paired_dt<-data.table(paired_dt[-1,])
+  paired_dt$structural_alignment_pos<-aln_positions
+  paired_dt <- na.omit(paired_dt)
+  
+  for(b_a_p in paired_dt$structural_alignment_pos){
+    positions<-as.numeric(c(paired_dt[structural_alignment_pos==b_a_p]$V1,paired_dt[structural_alignment_pos==b_a_p]$V2))
+    local_rmsd <- calculate_local_rmsd(model1[[1]], model2[[1]], positions)
+    rmsd_comparisons<-rbind(rmsd_comparisons, data.table( paste0(libraries_, collapse="."), libraries_[1], libraries_[2], local_rmsd, b_a_p))
+  }
+
+}
+
+colnames(rmsd_comparisons)<-c("lib_pair", "lib1", "lib2", "local_rmsd", "structural_alignment_pos")
+rmsd_comparisons<-left_join(rmsd_comparisons[,library:=lib1], BI_hotspots_dt[,.(library, structural_alignment_pos, significant)])[, hotspot1:=significant]
+rmsd_comparisons<-left_join(rmsd_comparisons[,library:=lib2], BI_hotspots_dt[,.(library, structural_alignment_pos, significant)])[, hotspot2:=significant]
+
+rmsd_comparisons_studyBI<-rmsd_comparisons
+rmsd_comparisons_studyBI[is.na(hotspot1) & is.na(hotspot2), hotspot:="non-hotspot"]
+rmsd_comparisons_studyBI[!is.na(hotspot1) | !is.na(hotspot2), hotspot:="hotspot"]
+rmsd_comparisons_studyBI[!is.na(hotspot1) & !is.na(hotspot2), hotspot:="both hotspot"]
+rmsd_comparisons_studyBI[structural_alignment_pos %in% BI_hotspots & hotspot!="non-hotspot" & hotspot!="hotspot", hotspot:="conserved hotspot"]
+
+
+rmsd_results <- rmsd_comparisons_studyBI[, .(
+  non_hotspot = if (.N > 0) sqrt(mean((local_rmsd[hotspot == "non-hotspot"])^2)) else NA_real_,
+  consv_hotspot = if (.N > 0) sqrt(mean((local_rmsd[hotspot == "conserved hotspot"])^2)) else NA_real_,
+  hotspot = if (.N > 0) sqrt(mean((local_rmsd[hotspot == "both hotspot"])^2)) else NA_real_
+), by=lib_pair]
+
+# annotate libraries
+dt_tmp<-melt(rmsd_results, id.var="lib_pair")
+dt_tmp[, class2 := as.integer(grepl("4", lib_pair))]
+
+dt_tmp[, lib1 := sub("\\..*", "", lib_pair)]      # before the first dot
+dt_tmp[, lib2 := sub("^[^.]*\\.", "", lib_pair)]  # after the first dot
+
+dt_tmp[sub("^(([^_]+)_([^_]+))_.*", "\\1", lib1)!=sub("^(([^_]+)_([^_]+))_.*", "\\1", lib2), diff_pdz:="different PDZ"] #keep only comparisons between different PDZs
+dt_tmp[sub("^(([^_]+)_([^_]+))_.*", "\\1", lib1)==sub("^(([^_]+)_([^_]+))_.*", "\\1", lib2), diff_pdz:="same PDZ"]
+
+
+# plot the distributions per group
+ggplot(dt_tmp[diff_pdz=="different PDZ"], aes(x=factor(variable, levels=c("consv_hotspot","hotspot", "non_hotspot"), labels=c("BI conserved\nhotspot","hotspot", "non-hotspot")), y=value, fill=variable, color=variable))+
+  geom_violin(scale="width", alpha=0.7)+
+  geom_point(position="jitter")+
+  geom_boxplot(width=0.2, fill="white", color="black", outliers=F)+
+  #geom_point(color="black", alpha=0.8)+
+  stat_compare_means(comparisons=list(c("BI conserved\nhotspot","hotspot"), c("non-hotspot","hotspot")), size=5, aes(label=after_stat(p.signif)), paired=T)+
+  scale_fill_manual(values=c("grey","brown1", "black"))+
+  scale_color_manual(values=c("grey","brown1", "black"))+
+  theme_classic()+
+  #geom_line(aes(group=V1), color="grey30", size=0.1)+
+  ylim(c(0,6.8))+
+  #facet_grid(~diff_pdz)+
+  ylab("RMSD")+#ggtitle("strutctural conservation of residues in the BI")+
+  theme(legend.position = "none", axis.title.x=element_blank())+
+  theme(legend.position="none", axis.title.x=element_blank(),
+        axis.text.x=element_blank(),
+        axis.ticks.x=element_blank())+
+  theme(axis.text.y=element_text(size=10,face="bold", color="black"),
+        axis.title.y=element_text(size=10,face="bold", color="black"))
+
+ggsave(paste0("Figs/Fig3/Fig3Gstructural_conservation_hotspot.png"), width=2.5, height=2.5)
+
+```
+
+# rsasa of the hotspots
+
+The conserved hotspots are also buried deeper in the hydrophobic binding pocket (median rSASA = 0.14 vs. 0.33 for conserved and non-conserved hotspots, respectively, Wilcoxon rank-sum test P=5.8x10-03; median rSASA for non-hotspots=0.58, P=1.5x10-14, Fig. 3h)
+
+```{r, fig.width=4, fig.height=4}
+BI_hotspots_dt[, hotspot_class:="non-Hotspot"]
+BI_hotspots_dt[significant==T, hotspot_class:="Hotspot"]
+BI_hotspots_dt[BI_consv_hotspot==T, hotspot_class:="Hotspot in >2/5 PDZs"]
+BI_hotspots_dt_simple<-BI_hotspots_dt[, .(significant=significant[1], rsasa=rsasa[1], hotspot_class=hotspot_class[1]), by=.(library, structural_alignment_pos)]
+
+ggplot(BI_hotspots_dt_simple, aes(x=factor(hotspot_class, levels=c("Hotspot in >2/5 PDZs", "Hotspot", "non-Hotspot")), y=rsasa, fill=hotspot_class, color=hotspot_class))+
+  geom_hline(aes(yintercept = 0.25), color="grey")+
+  #geom_hline(aes(yintercept = 0), color="grey")+
+  geom_violin(scale="width", alpha=0.7)+
+  scale_fill_manual(values=c("black", "brown1", "grey"))+
+  scale_color_manual(values=c("black", "brown1", "grey"))+
+  geom_point(position="jitter")+
+  geom_boxplot(width=0.2, fill="white", color="black", outliers=F)+
+  theme_classic()+
+  ylab("RSASA")+
+  theme(axis.text.x=element_blank(),
+        axis.ticks.x=element_blank(), axis.title.x=element_blank(), legend.position="none")+
+  stat_compare_means(comparisons = list(c("Hotspot in >2/5 PDZs", "Hotspot"), c("Hotspot in >2/5 PDZs", "non-Hotspot"), c("Hotspot", "non-Hotspot")), aes(label = after_stat(p.signif)))+ylim(c(0,1.4))+
+  theme(axis.text.y=element_text(size=10,face="bold", color="black"),
+        axis.title.y=element_text(size=10,face="bold", color="black"))
+
+ggsave(paste0("Figs/Fig3/Fig3Hrsasa_hotspots.png"), width=2.5, height=2.5)
+
+summary(BI_hotspots_dt_simple[hotspot_class=="Hotspot in >2/5 PDZs"]$rsasa)
+summary(BI_hotspots_dt_simple[hotspot_class=="Hotspot"]$rsasa)
+summary(BI_hotspots_dt_simple[hotspot_class=="non-Hotspot"]$rsasa)
+```
+
+
+
+
+
+# chimera hotspots figures
+This loop prints the raw indexes of each interactions that are hotspots.  
+The first one is the conserved hotspots.  
+Second string are the non conserved hotspots. 
+Finally, the BI residues non-hotspots.  
+Used to select the residues in chimera to highlight them
+```{r}
+BI_hotspots_dt_<-BI_hotspots_dt[,.(significant=significant[1],BI_consv_hotspot=BI_consv_hotspot[1]), by=.(library, structural_alignment_pos, Pos)]
+
+for(lib in libraries_binding_names){
+  print(lib)
+  print(paste0(BI_hotspots_dt_[library==lib & significant==T & BI_consv_hotspot==T]$Pos, collapse=","))
+  print(paste0(BI_hotspots_dt_[library==lib & significant==T & BI_consv_hotspot==F]$Pos, collapse=","))
+  print(paste0(BI_hotspots_dt_[library==lib & significant==F]$Pos, collapse=","))
+}
+```
+
+
+
+# binding interface heatmaps 
+```{r, fig.width=15, fig.height=7}
+library(ggnewscale)
+get_contacts_dt<-as.data.table(read.csv("/Users/aa33/Library/CloudStorage/OneDrive-WellcomeSangerInstitute/001-Projects/03-PDZ_Homologs/02-DryLab/001-data_analysis/data_analysis/01_structures/3DstructureMetrics/04-contacts/contacts_table_complete.csv", sep=","))
+
+all_ddg_table[,mutation:=substr(id, nchar(id), nchar(id))]
+
+get_contacts_dt_tmp<-get_contacts_dt[chain_1=="A" & chain_2=="B"]
+setnames(get_contacts_dt, "Pos_1", "Pos")
+
+get_contacts_dt_<-left_join(get_contacts_dt, pdb_metrics_dt[,c("structural_alignment_pos", "Pos", "library")], by=c("Pos", "library"))
+all_ddg_table$lib_name<-lib_code_to_name(all_ddg_table$library, libraries, libraries_names)
+all_ddg_table$lib_name<-gsub("_", "-", gsub(" binding ", " | ", all_ddg_table$lib_name))
+all_median_ddg_table$lib_name<-lib_code_to_name(all_median_ddg_table$library, libraries, libraries_names)
+all_median_ddg_table$lib_name<-gsub("_", "-", gsub(" binding ", " | ", all_median_ddg_table$lib_name))
+get_contacts_dt_$lib_name<-lib_code_to_name(get_contacts_dt_$library, libraries, libraries_names)
+get_contacts_dt_$lib_name<-gsub("_", "-", gsub(" binding ", " | ", get_contacts_dt_$lib_name))
+
+
+all_hotspots<-unique(BI_hotspots_dt[significant==T]$structural_alignment_pos)
+p<-ggplot(all_ddg_table[assay=="binding" & structural_alignment_pos %in% all_hotspots,],aes(x=lib_name, y=mutation))+
+    xlab("")+
+    ylab("")+
+    geom_tile(aes(fill=ddg))+ 
+  facet_wrap(~structural_alignment_pos, nrow=1)+
+  theme_clean(base_size = 13)+
+    scale_fill_gradient2(low="blue",mid="grey90",high="red",midpoint=0, na.value = "grey50")+
+    scale_y_discrete(limits=c("distance",aa_order2))+
+  scale_x_discrete(limits=unique(all_ddg_table[assay=="binding"]$lib_name))+
+    theme( plot.title = element_text(size=35))+
+    theme( panel.spacing.x = unit(0.1, "lines"), 
+           axis.text.x = element_text(angle=90, vjust=0.5, hjust=1), 
+           axis.ticks.x = element_blank(), 
+           #panel.grid.minor = element_blank(), 
+           axis.text.y = element_text(size=10, color=c("#FF7013",colors_aa), face="bold"), 
+           plot.margin = unit(c(1, 0,0,0), "cm"),
+           legend.text = element_text(size=15), 
+           legend.title =  element_text(size=20)) + 
+  #ggtitle("CRIPT binding libraries")+
+    geom_text(data = all_ddg_table[assay=="binding" & structural_alignment_pos %in% all_hotspots,], size=5, aes(x=lib_name, y=WT_aa, label = WT_aa, color=WT_aa), show.legend=F)+
+scale_color_manual(limits=aa_order2, values=colors_aa)+
+  
+  new_scale("fill")+
+  geom_point(data = all_median_ddg_table[assay=="binding" & structural_alignment_pos %in% all_hotspots,], aes(x=lib_name, y=1, label = WT_aa, fill=scHAmin_ligand), shape=21, size=3)+
+  scale_fill_gradient2("distance", low="#FF7013",mid="white",high="#36C6CC",midpoint=5, na.value = "grey50")+
+  theme(legend.position = "right")+
+  
+  new_scale("fill")+
+  geom_point(data=get_contacts_dt_[chain_1=="A" & chain_2=="B" & structural_alignment_pos %in% all_hotspots,], aes(x=lib_name, y=residue_2_letter, fill=interaction_types), shape=23, size=2.5, alpha=1)
+
+ggsave(paste0("Figs/Fig3/FigS3CBI_hotspots_heatmaps_legend.png"), width=18, height=7)
+
+p+theme(legend.position = "none", strip.text = element_text(size=14, face="bold"), axis.text.y = element_text(size=14, face="bold"))
+#ggsave(paste0(results_dir_manuscript,"/Fig3/BI_hotspots_heatmaps.png"), width=18, height=8)
+```
+
+
+
+```{r, fig.width=20, fig.height=7}
+all_hotspots<-BI_hotspots_dt_pdz[num_pdzs==0]$structural_alignment_pos
+p<-ggplot(all_ddg_table[assay=="binding" & structural_alignment_pos %in% all_hotspots,],aes(x=lib_name, y=mutation))+
+    xlab("")+
+    ylab("")+
+    geom_tile(aes(fill=ddg))+ 
+  facet_wrap(~structural_alignment_pos, nrow=1)+
+  theme_clean(base_size = 13)+
+    scale_fill_gradient2(low="blue",mid="grey90",high="red",midpoint=0, na.value = "grey50")+
+    scale_y_discrete(limits=c("distance",aa_order2))+
+  scale_x_discrete(limits=unique(all_ddg_table[assay=="binding"]$lib_name))+
+    theme( plot.title = element_text(size=35))+
+    theme( panel.spacing.x = unit(0.1, "lines"), 
+           axis.text.x = element_text(angle=90, vjust=0.5, hjust=1), 
+           axis.ticks.x = element_blank(), 
+           #panel.grid.minor = element_blank(), 
+           axis.text.y = element_text(size=10, color=c("#FF7013",colors_aa), face="bold"), 
+           plot.margin = unit(c(1, 0,0,0), "cm"),
+           legend.text = element_text(size=15), 
+           legend.title =  element_text(size=20)) + 
+  #ggtitle("CRIPT binding libraries")+
+    geom_text(data = all_ddg_table[assay=="binding" & structural_alignment_pos %in% all_hotspots,], size=5, aes(x=lib_name, y=WT_aa, label = WT_aa, color=WT_aa), show.legend=F)+
+scale_color_manual(limits=aa_order2, values=colors_aa)+
+  
+  new_scale("fill")+
+  geom_point(data = all_median_ddg_table[assay=="binding" & structural_alignment_pos %in% all_hotspots,], aes(x=lib_name, y=1, label = WT_aa, fill=scHAmin_ligand), shape=21, size=3)+
+  scale_fill_gradient2("distance", low="#FF7013",mid="white",high="#36C6CC",midpoint=5, na.value = "grey50")+
+  theme(legend.position = "right")+
+  
+  new_scale("fill")+
+  geom_point(data=get_contacts_dt_[chain_1=="A" & chain_2=="B" & structural_alignment_pos %in% all_hotspots,], aes(x=lib_name, y=residue_2_letter, fill=interaction_types), shape=23, size=2.5, alpha=1)
+
+p+theme(legend.position = "none", strip.text = element_text(size=14, face="bold"), axis.text.y = element_text(size=14, face="bold"))
+ggsave(paste0("Figs/Fig3/FigS3CBI_nonhotspots_heatmaps.png"), width=18, height=7)
+```
+
+
+# enrichment of non-hotspots in b2-b3 loop
+These non-hotspot contacts are more solvent accessible (Fig. 3h) and they are particularly enriched in the highly variable β2–β3 loop31 (OR=6.23, P=0.04, one-sided FET, Fig. 3b and Extended Data Fig. 3a).
+```{r}
+all_non_hotspots<-BI_hotspots_dt_pdz[num_pdzs==0]$structural_alignment_pos
+all_non_hotspots_dt<-data.table(structural_alignment_pos=all_bi)
+all_non_hotspots_dt[, b2_b3_loop:=structural_alignment_pos %in% c(30:44)]
+all_non_hotspots_dt[, no_htspot:=structural_alignment_pos %in% all_non_hotspots]
+
+fisher.test(table(all_non_hotspots_dt$b2_b3_loop, all_non_hotspots_dt$no_htspot), alternative = "greater")
+```
+
+# save the hotspots definition table
+```{r}
+BI_hotspots_dt_complete<-left_join(BI_hotspots_dt[,.(library, lib_name, structural_alignment_pos, ddg, std_ddg, WT_aa, rsasa, binding_interface_contacts, class_BI, hotspot_class, Uniprot_pos_ref.x)], test_results)
+
+
+BI_hotspots_dt_complete<-BI_hotspots_dt_complete[, .(mean_ddg=mean(ddg), rsasa=rsasa[1],p_value=p_value[1], p_adjusted=p_adjusted[1], median_ddg=median(ddg), BI_hotspot_class=hotspot_class[1]), by=.(lib_name, structural_alignment_pos, Uniprot_pos_ref.x)][,class:="binding_interface"]
+
+BI_hotspots_dt_complete$lib_name<-tolower(gsub("-", "_",gsub("\n", "_", BI_hotspots_dt_complete$lib_name)))
+colnames(BI_hotspots_dt_complete)[3]<-"Uniprot_pos_ref"
+
+fwrite(BI_hotspots_dt_complete, paste0("supplementary_tables/Supplementary_table6_BI.txt"))
+```
+
+
+
+
+
+
+
+
+
