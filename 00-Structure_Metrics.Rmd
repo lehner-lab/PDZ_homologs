@@ -61,7 +61,6 @@ aa_mapping <- c(
 
 
 # 2. SECONDARY STRUCTURE INFO (helix,sheet,rsasa)
-I am just using the secondary structures from predicted folding structures (no ligand)
 ```{r}
 # Initialize data.table to store secondary structures
 secondary_structures <- data.table()
