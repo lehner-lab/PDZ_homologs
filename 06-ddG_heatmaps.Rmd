@@ -26,27 +26,21 @@ aln_table<-as.data.table(read.table(paste0("/Users/aa33/Library/CloudStorage/One
 
 ## libraries used for the analysis
 ```{r message=FALSE, warning=FALSE}
-library(car)
-library(systemfonts)
-library(plyr)
-library(ggiraph)
-library(ggiraphExtra)
-library(rstatix)
 library(data.table)
-library(dplyr)
-library(seqinr)
-library(stringr)
 library(ggplot2)
-library(Matrix)
-library(viridis)
-library(ggpubr)
+library(bio3d)
+library(dplyr)
+library(stringr)
 library(readxl)
-library(stringi)
-library(GGally)
-library("readxl")
-library(modelr)
+library(tidyr)
 library(cowplot)
+library(ggpmisc)
+library(ggpubr)
+library(scales)
 library(ggpointdensity)
+
+sessionInfo()
+
 ```
 
 

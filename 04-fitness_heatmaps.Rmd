@@ -1,5 +1,5 @@
 ---
-title: "Fitness heatmaps"
+title: "stage3: fitness heatmaps"
 author: "Aina Martí-Aranda"
 date: "June 2025"
 output:
@@ -28,37 +28,22 @@ pdb_metrics_dt<-as.data.table(read.csv("data/annotations/structure_metrics.csv",
 
 
 ## libraries used for the analysis
-```{r, warning=F, results='hide', message=FALSE}
-library(car)
-library(systemfonts)
-library(plyr)
-library(ggiraph)
-library(ggiraphExtra)
-library(rstatix)
+```{r message=FALSE, warning=FALSE}
 library(data.table)
-library(dplyr)
-library(seqinr)
-library(stringr)
 library(ggplot2)
-library(Matrix)
-library(viridis)
-library(ggpubr)
+library(bio3d)
+library(dplyr)
+library(stringr)
 library(readxl)
-library(stringi)
-library(GGally)
-library("readxl")
-library(modelr)
-library(cowplot)
-library(Hmisc)
-library(ggrepel)
-library(dplyr) 
-library(ddpcr)
-library(ggpointdensity)
-library(ggpmisc)
-library(scales)
 library(tidyr)
+library(cowplot)
+library(ggpmisc)
+library(ggpubr)
+library(scales)
 library(magick)
-library(data.table)
+
+sessionInfo()
+
 ```
 
 # load fitness data and plot big heatmaps (only singles)

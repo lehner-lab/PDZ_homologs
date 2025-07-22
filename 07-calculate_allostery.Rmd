@@ -21,36 +21,14 @@ load('source_variables.RData')
 
 ## libraries used for the analysis
 ```{r message=FALSE, warning=FALSE}
-library(car)
-library(systemfonts)
-library(plyr)
-library(ggiraph)
-library(ggiraphExtra)
-library(rstatix)
 library(data.table)
-library(dplyr)
-library(seqinr)
-library(stringr)
 library(ggplot2)
-library(Matrix)
-library(viridis)
-library(ggpubr)
-library(readxl)
-library(stringi)
-library(GGally)
-library(readxl)
-library(modelr)
-library(cowplot)
-library(Hmisc)
-library(ggrepel)
-library(dplyr) 
-library(ddpcr)
-library(ggpointdensity)
+library(dplyr)
 library(tidyr)
-library(magick)
-library(ggpointdensity)
-library(ggpmisc)
-library(ggridges)
+library(ggpubr)
+
+sessionInfo()
+
 ```
 
 

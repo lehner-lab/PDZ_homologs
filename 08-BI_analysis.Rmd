@@ -23,36 +23,22 @@ load('source_variables.RData')
 
 ## libraries used for the analysis
 ```{r message=FALSE, warning=FALSE}
-library(car)
-library(systemfonts)
-library(plyr)
-library(ggiraph)
-library(ggiraphExtra)
-library(rstatix)
 library(data.table)
-library(dplyr)
-library(seqinr)
-library(stringr)
 library(ggplot2)
-library(Matrix)
-library(viridis)
-library(ggpubr)
+library(bio3d)
+library(dplyr)
+library(stringr)
 library(readxl)
-library(stringi)
-library(GGally)
-library(readxl)
-library(modelr)
-library(cowplot)
-library(Hmisc)
-library(ggrepel)
-library(dplyr) 
-library(ddpcr)
-library(ggpointdensity)
 library(tidyr)
-library(magick)
-library(ggpointdensity)
+library(cowplot)
 library(ggpmisc)
+library(ggpubr)
+library(scales)
 library(ggridges)
+library(ggiraphExtra)
+
+sessionInfo()
+
 ```
 
 
@@ -95,7 +81,7 @@ all_ddg_table_binding[structural_alignment_pos %in% core_bi,class_BI:="core_BI"]
 ```
 
 
-# Fig 3.a: BI distribution of effects
+# BI distribution of effects
 
 ```{r}
 all_ddg_table_binding$lib_name<-lib_code_to_name(all_ddg_table_binding$library, libraries_binding_names, libraries_names_plots[which(libraries %in% libraries_binding)])

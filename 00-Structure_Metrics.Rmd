@@ -14,29 +14,14 @@ output:
 library(data.table)
 library(ggplot2)
 library(bio3d)
-library(car)
-library(systemfonts)
-library(plyr)
-library(ggiraph)
-library(ggiraphExtra)
-library(rstatix)
-library(data.table)
 library(dplyr)
-library(seqinr)
 library(stringr)
-library(ggplot2)
-library(Matrix)
-library(viridis)
-library(ggpubr)
 library(readxl)
-library(stringi)
-library(GGally)
-library("readxl")
-library(modelr)
-library(cowplot)
-library(ggpointdensity)
-library("Biostrings")
+library(Biostrings)
 library(tidyr)
+
+sessionInfo()
+
 ```
 
 
@@ -61,6 +46,7 @@ aa_mapping <- c(
 
 
 # 2. SECONDARY STRUCTURE INFO (helix,sheet,rsasa)
+I am just using the secondary structures from predicted folding structures (no ligand)
 ```{r}
 # Initialize data.table to store secondary structures
 secondary_structures <- data.table()
@@ -258,6 +244,8 @@ write.csv(interactions_processed_complete_table, paste0("data/annotations/tmp_fi
 
 # 6. ALIGNMENT
 ## [USED] T-coffee structural alignment of only my 6 PDZs
+T-coffe could not run with so many sequences and it could not find proper PDBs where to base the structural alignment from. So I am using tcoffe with only my 5 PDZs
+
 ```{r warning=FALSE}
 ids_my_pdzs=c("P78352_DLG4_HUMAN_PDZ-3", "P78352_DLG4_HUMAN_PDZ-2", "Q5T2W1_NHRF3_HUMAN_PDZ-2", "Q5T2W1_NHRF3_HUMAN_PDZ-1", "Q96RT1_ERBIN_HUMAN_PDZ-1")
 
