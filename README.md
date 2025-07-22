@@ -11,13 +11,9 @@ The code is ran on RMarkdown
 
 Code was tested with Mac OSX and with R version 4.5.0 and with the following main dependencies:
 tidyr_1.3.1  
-Biostrings_2.77.1  
 ggplot2_3.5.2    
-stringr_1.5.1   
 seqinr_4.2-36  
 dplyr_1.1.4  
-rstatix_0.7.2  
-bio3d_2.4-5  
 data.table_1.17.4  
 
 See the HTML files ran for each script for detailed session information in each case.
