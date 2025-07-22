@@ -1,5 +1,5 @@
 # PDZ_homologs
-Welcome to the GitHub repository for the following publication: The evolution of allostery in a protein family (Marti-Aranda and Lehner 2025).
+Welcome to the GitHub repository for the following publication: *The evolution of allostery in a protein family* (Marti-Aranda and Lehner 2025).
 
 Here you'll find source code for computational analyses and to reproduce the figures in the paper.
 
