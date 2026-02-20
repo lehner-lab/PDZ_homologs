@@ -115,7 +115,6 @@ for (pdz in tolower(pdz_names)) {
   
   # Save results
   predicted_phenotypes_simple<-predicted_phenotypes[,c("nt_seq", "aa_seq", "Nham_nt", "Nham_aa","Nmut_codons", "WT","STOP", "growthrate", "growthrate_sigma","observed_fitness","sigma", "category", "phenotype", "Fold","mean", "std", "ci95", "assay", "block", "library", "predicted_fitness", "additive_trait_f", "additive_trait_b", "additive_trait")]
-  #fwrite(predicted_phenotypes_simple, paste0(base_dir, "/tmp_tables/mochi/pred_obs_mochi_", pdz, ".csv"), sep = "\t")
   counter <- counter + 1
   predicted_phenotypes_all<-rbind(predicted_phenotypes_all, predicted_phenotypes_simple)
 }
@@ -191,73 +190,67 @@ predicted_phenotypes_all$lib_name<-sub(" abundance","\nabundance",sub("_", "-", 
 p<-ggplot(predicted_phenotypes_all,(aes(y=observed_fitness, x=predicted_fitness, color=factor(block))))+
     geom_point(alpha=0.05) + 
     stat_cor(aes(label = ..r.label..), cor.coef.name ="R")+
-    #stat_regline_equation( aes(label = ..rr.label..), size = 6, fontface="bold")+ 
     ylim(c(-1.6, 0.6))+ 
     xlim(c(-1.6, 0.6))+
     xlab("Predicted fitness")+
     ylab("Observed fitness")+
     theme_classic(base_size = 13)+
     geom_smooth(method = "lm", se = FALSE, color="black", linetype="dashed")+
-    #ggtitle(gsub(" binding", "\nbinding",  gsub(" with", "", libraries_names[counter]))) +
     facet_wrap(~factor(lib_name, levels=sub(" abundance","\nabundance",sub("_", "-", gsub(" binding ", " | ", libraries_names_plots)))), nrow=2)+
-    #coord_fixed(ratio = 1) + 
     guides(color=guide_legend(title="block"))+
   theme(legend.position = "none") +
       scale_color_manual(values = c("orange", "slateblue1"))
 
-ggsave(paste0("Figs/Fig2/FigS2Apred_vs_obs_mochi_all.png"), width=13, height=4)
+ggsave(paste0("Figs/Fig2/FigS2Apred_vs_obs_mochi_all.pdf"), width=13, height=4)
 
  p<-ggplot(predicted_phenotypes_all[assay=="abundance",],(aes(y=observed_fitness, x=additive_trait)))+
     geom_pointdensity() + 
     scale_colour_gradient2(low = "grey96", mid="black", high = "black", midpoint = 5000 )+
     theme_classic(base_size = 13) +
     geom_line(aes(x=additive_trait, y=predicted_fitness), color="firebrick3", linewidth=1)+
-    #ggtitle(libraries_names[which(libraries==library_)]) +
-  theme(plot.title = element_text(size=15))+
+    theme(plot.title = element_text(size=15))+
   facet_wrap(~factor(lib_name, levels=sub(" abundance","\nabundance",sub("_", "-", gsub(" binding ", " | ", libraries_names_plots))), labels=sub(" abundance","",sub("_", "-", gsub(" binding ", " | ", libraries_names_plots))))+
                factor(block, levels=c(1,2), labels=c("block1", "block2")), nrow=1)+
   xlab("Additive trait")+ylab("Observed fitness")
 
-ggsave(paste0("Figs/Fig2/FigS2Bmochi_folding_model_all.png"), width=13, height=2.5)
+ggsave(paste0("Figs/Fig2/FigS2Bmochi_folding_model_all.pdf"), width=13, height=2.5)
 
 ```
 
 ## Examples of the report plots for the main figure
 ```{r}
+p<-ggplot(predicted_phenotypes_all[library=="erbin_pdz1",],(aes(y=observed_fitness, x=additive_trait)))+
+    geom_pointdensity() + 
+    scale_colour_gradient2(low = "grey96", mid="black", high = "black", midpoint = 5000 )+
+    theme_classic(base_size = 13) +
+    geom_line(aes(x=additive_trait, y=predicted_fitness), color="firebrick3", linewidth=1)+
+    theme(plot.title = element_text(size=15))+
+  facet_wrap(~factor(lib_name, levels="ERBIN-PDZ1\nabundance", labels="ERBIN-PDZ1")+
+               factor(block, levels=c(1,2), labels=c("block1", "block2")), nrow=1)+
+  xlab("Additive trait")+ylab("Observed fitness")
+
+ggsave(paste0("Figs/Fig2/Fig2Bfolding_add_trait_erbin.pdf"), width=4, height=2.5)
+
+```
+
+```{r}
 p<-ggplot(predicted_phenotypes_all[library %in% c("erbin_pdz1", "erbin_pdz1_cript")],(aes(y=observed_fitness, x=predicted_fitness, color=factor(block))))+
     geom_point(alpha=0.05) + 
     stat_cor(aes(label = ..r.label..), cor.coef.name ="R")+
-    #stat_regline_equation( aes(label = ..rr.label..), size = 6, fontface="bold")+ 
     ylim(c(-1.6, 0.6))+ 
     xlim(c(-1.6, 0.6))+
     xlab("Predicted fitness")+
     ylab("Observed fitness")+
     theme_classic(base_size = 13)+
     geom_smooth(method = "lm", se = FALSE, color="black", linetype="dashed")+
-    #ggtitle(gsub(" binding", "\nbinding",  gsub(" with", "", libraries_names[counter]))) +
     facet_wrap(~factor(lib_name, levels=sub("_", "-", sub(" binding ", " | ",sub(" abundance", "\nabundance",libraries_names_plots)))), nrow=1)+
-    #coord_fixed(ratio = 1) + 
     guides(color=guide_legend(title="block"))+
   theme(legend.position = "none") +
       scale_color_manual(values = c("orange", "slateblue1"))
 
-ggsave(paste0("Figs/Fig1/Fig1Mobs_vs_pred_erbin.png"), width=4, height=2.5)
-
-
-p<-ggplot(predicted_phenotypes_all[library=="erbin_pdz1",],(aes(y=observed_fitness, x=additive_trait)))+
-    geom_pointdensity() + 
-    scale_colour_gradient2(low = "grey96", mid="black", high = "black", midpoint = 5000 )+
-    theme_classic(base_size = 13) +
-    geom_line(aes(x=additive_trait, y=predicted_fitness), color="firebrick3", linewidth=1)+
-    #ggtitle(libraries_names[which(libraries==library_)]) +
-  theme(plot.title = element_text(size=15))+
-  facet_wrap(~factor(lib_name, levels="ERBIN-PDZ1\nabundance", labels="ERBIN-PDZ1")+
-               factor(block, levels=c(1,2), labels=c("block1", "block2")), nrow=1)+
-  xlab("Additive trait")+ylab("Observed fitness")
-
-ggsave(paste0("Figs/Fig1/Fig1Lfolding_add_trait_erbin.png"), width=4, height=2.5)
-
+ggsave(paste0("Figs/Fig2/Fig2Cobs_vs_pred_erbin.pdf"), width=4, height=2.5)
 ```
+
 
 
 # correlations summary tables and plots
@@ -297,7 +290,7 @@ ggplot(correlations_all_dt)+
         axis.title.y=element_text(size=8),
         legend.key.height= unit(0.2, 'cm'),
         legend.key.width= unit(0.2, 'cm'), legend.position="none")
-ggsave(paste0("Figs/Fig1/Fig1Ndistribution_correlations_ddg_obs_pred.png"), width=1.7, height=1.7)
+ggsave(paste0("Figs/Fig2/Fig2Ddistribution_correlations_ddg_obs_pred.pdf"), width=1.7, height=1.7)
 ```
 
 

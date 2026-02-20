@@ -92,7 +92,6 @@ for (lib in libraries_names) {
   if (is.na(str_extract(lib, "psd95_pdz3"))) {
     syn_variants_path <- paste0("data/DiMSum/block1/", lib, "/fitness_synonymous.txt")
     syn_variants <- fread(syn_variants_path, na.strings = "NA")[, WT := ifelse(is.na(WT), FALSE, WT)]
-    #colnames(syn_variants)[replicate_cols] <- c("R1", "R2", "R3")
     data_b1 <- rbind(data_b1, syn_variants[WT == FALSE])
   }
   

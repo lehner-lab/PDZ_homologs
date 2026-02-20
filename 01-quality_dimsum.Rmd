@@ -111,7 +111,6 @@ for (library in libraries_names) {
   all_variants[STOP == "TRUE", category := "stop"]
   
   # Save processed variants
-  #write.csv(all_variants, paste0(results_dir, "fitness_tables_per_block/", library, "_b1_all_variants.csv"))
   all_variants[, library:=library]
   all_variants[, block:=1]
   all_variants<-all_variants[, c("aa_seq", "Nham_aa", "WT", "STOP", "mean_count", "R1", "R2", "R3", "fitness", "sigma", "category", "library", "block")]
@@ -180,7 +179,6 @@ for (library in libraries_names) {
     all_variants[STOP == "TRUE", category := "stop"]
     
     # Save processed variants
-    #write.csv(all_variants, paste0(results_dir, "fitness_tables_per_block/", library, "_b2_all_variants.csv"))
     all_variants[, library:=library]
     all_variants[, block:=2]
     all_variants<-all_variants[, c("aa_seq", "Nham_aa", "WT", "STOP", "mean_count", "R1", "R2", "R3", "fitness", "sigma", "category", "library", "block")]
@@ -211,7 +209,6 @@ for (library in libraries_names) {
 
 # Save correlations to a file
 write.table(correlations_pearson, paste0("tmp_tables/fitness_correlations_pearson.csv"))
-#write.table(all_variants, paste0("tmp_tables/fitness_all_variants_all.csv"))
 
 ```
 
@@ -223,7 +220,7 @@ write.table(correlations_pearson, paste0("tmp_tables/fitness_correlations_pearso
 # joined plots
 ```{r correlations, fig.width=11, fig.height=20}
 plot_grid(plotlist=plots_joined_list, ncol=4)
-ggsave(paste0("Figs/Fig1/FigS1A_fitness_correlations_and_distributions.png"), width=17.5, height=13.5)
+ggsave(paste0("Figs/Fig1/FigS1A_fitness_correlations_and_distributions.pdf"), width=17.5, height=13.5)
 ```
 
 
@@ -254,7 +251,7 @@ correlation_plot <- gg_replicate_fitness_correlations(table_subset) +
   ggtitle(paste0(libraries_names[counter], "\nBlock 2"))
   
 correlation_plot+ggtitle("ERBIN PDZ1 binding CRIPT block2")+theme(title=element_text(face = "bold"))
-ggsave(paste0("Figs/Fig1/Fig1G_fitness_correlation_777_808_b2.png"), width=3.3, height=3.5)
+ggsave(paste0("Figs/Fig1/Fig1G_fitness_correlation_777_808_b2.pdf"), width=3.3, height=3.5)
 
 ```
 
@@ -263,6 +260,7 @@ ggsave(paste0("Figs/Fig1/Fig1G_fitness_correlation_777_808_b2.png"), width=3.3, 
 
 # summary replicate correlations
 ```{r}
+correlations_pearson<-read.table(paste0("tmp_tables/fitness_correlations_pearson.csv"))
 correlations_pearson_long<-melt(as.data.table(correlations_pearson), id.vars =c("library", "lib_name","block") )
 
 ggplot(correlations_pearson_long)+
@@ -273,8 +271,8 @@ ggplot(correlations_pearson_long)+
   xlim(c(0,1))+
   xlab("pearson replicate correlations")+
   theme(axis.title=element_text(size=8), legend.position = "top", legend.title=element_blank(),legend.key.height= unit(0.2, 'cm'),
-        legend.key.width= unit(0.2, 'cm'))
-ggsave(paste0("Figs/Fig1/Fig1H_summary_replicate_correlations.png"), height=2.5, width=2)
+        legend.key.width= unit(0.2, 'cm'), axis.title.x =element_text(size=8), axis.title.y =element_text(size=8))
+ggsave(paste0("Figs/Fig1/Fig1H_summary_replicate_correlations.pdf"), height=2.5, width=2)
 
 ```
 

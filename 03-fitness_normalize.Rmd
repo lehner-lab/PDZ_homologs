@@ -15,7 +15,7 @@ output:
 This script will 
 1. normalize the fitness values between blocks and libraries.
 2. Plots of the overlapping regions (Figure S1B)
-3. Choose alternative backgrounds as WT when there are no singles in some of the blocks.
+3. For visualization, choose alternative backgrounds as WT when there are no singles in some of the blocks.
 
 ```{r setup}
 base_dir<-"/Users/aa33/Library/CloudStorage/OneDrive-WellcomeSangerInstitute/001-Projects/03-PDZ_Homologs/02-DryLab/001-data_analysis/data_analysis_github/"
@@ -46,8 +46,6 @@ sessionInfo()
 
 
 # normalize between blocks
-I am showing the entire distributions of stop and synonymous variants
-Then I am taking the stops of the overlapping regions + overall synonymous and normalyzing by this
 
 ```{r}
 library(ggridges)
@@ -144,8 +142,6 @@ plot_grid(plotlist=syn_stops_plots_norm, ncol=5)
 ```
 
 # normalize between libraries
-I will normalize all to 762_809 as it had a very nice dynamic range and fitness correlations
-
 ```{r}
 #reference data
 syn_stops_plots_norm<-list()
@@ -222,7 +218,12 @@ p<-ggplot(all_normalized)+
         legend.position = "top",
         legend.title = element_blank())+
   xlab("fitness normalized")+
-      scale_fill_manual(values=c("blue","red", "green3"))#+theme(legend.position = "none")
+      scale_fill_manual(values=c("blue","red", "green3"))+
+  theme(axis.text.x=element_text(hjust=1))+
+  theme(axis.text.x=element_text(size=10,face="bold", color="black"), 
+        axis.text.y=element_text(size=13,face="bold", color="black"),
+        axis.title.y=element_text(size=13,face="bold", color="black"),
+        axis.title.x=element_blank())
 p
 
 p2<-ggplot(all_normalized[all_normalized$library %in% c("ERBIN_PDZ1 abundance", "ERBIN_PDZ1 binding CRIPT"),])+
@@ -231,9 +232,9 @@ p2<-ggplot(all_normalized[all_normalized$library %in% c("ERBIN_PDZ1 abundance", 
       xlim(c(-3,1))+
       #ggtitle("All libraries normalized")+
   theme(axis.title.y = element_blank(),
-        axis.text.y = element_text(size=10),
-        axis.text.x = element_text(size=10),
-        axis.title.x = element_text(size=13),
+        axis.text.y = element_text(size=10,face="bold", color="black"),
+        axis.text.x = element_text(size=10,face="bold", color="black"),
+        axis.title.x = element_text(size=13,face="bold", color="black"),
         legend.position = "top",
         legend.title = element_blank(),
         legend.key.size = unit(0.5, 'cm'),
@@ -243,7 +244,7 @@ p2<-ggplot(all_normalized[all_normalized$library %in% c("ERBIN_PDZ1 abundance", 
       scale_fill_manual(values=c("blue","red", "green3"))+#+theme(legend.position = "none")
   guides(fill=guide_legend(nrow=1,byrow=TRUE))
 p2
-ggsave(paste0("Figs/Fig1/Fig1I_distributions_examples.png"), width=3.2, height=3.7 )
+ggsave(paste0("Figs/Fig1/Fig1I_distributions_examples.pdf"), width=3.2, height=3.7 )
 
 
 
@@ -445,13 +446,26 @@ all_fitness_modified_wide[, modified_background:=library %in% modifications_libr
 all_fitness_modified_wide$library_name<-gsub("_", "-", gsub(" binding ", "\n", (unlist(lapply(all_fitness_modified_wide$library, lib_code_to_name, libraries_names, libraries_names_plots)))))
 all_fitness_modified_wide$library_name<-gsub(" abundance", "\nabundance", all_fitness_modified_wide$library_name)
 
+
+plot_dt <- as.data.table(
+  all_fitness_modified_wide[!library %in% c("psd95_pdz3", "psd95_pdz3_cript") & !is.na(fitness_norm.1) & !is.na(fitness_norm.2)]
+)
+n_dt <- plot_dt[, .(N = .N), by = library_name]
+
+
 ggplot(all_fitness_modified_wide[!library %in% c("psd95_pdz3", "psd95_pdz3_cript")], aes(x=fitness_norm.1, y=fitness_norm.2, color=modified_background))+
   scale_color_manual(values=c("black", "red"))+
-  stat_cor(aes(label = paste(..rr.label.., sep = "~`,`~")), label.y = 1, label.x=-1.9, color="black", size=4)+
+  stat_cor(aes(label = paste(..rr.label.., sep = "~`,`~")), label.y = 1, label.x=-2.5, color="black", size=4)+
   geom_point(alpha=0.5)+
   geom_errorbar(aes(ymin = fitness_norm.2 - std_norm.2, ymax = fitness_norm.2 + std_norm.2), width = 0.1, alpha = 0.3) +
   geom_errorbar(aes(xmin = fitness_norm.1 - std_norm.1, xmax = fitness_norm.1 + std_norm.1), width = 0.1, alpha = 0.3) +
   geom_abline()+
+  geom_text(
+    data = n_dt,
+    aes(x = -1.6, y =0.45, label = paste0("N = ", N)),
+    inherit.aes = FALSE,
+    size = 4
+  ) +
   facet_wrap(~library_name, nrow=5)+
   theme_classic()+
   xlab("normalized fitness block1")+
@@ -463,7 +477,7 @@ ggplot(all_fitness_modified_wide[!library %in% c("psd95_pdz3", "psd95_pdz3_cript
         strip.background = element_rect(color="grey", fill="white", size=1.5, linetype="solid"
      ))
 
-ggsave(paste0("Figs/Fig1/FigS1B_normalized_overlapping.png"), width=3, height=8)
+ggsave(paste0("Figs/Fig1/FigS1B_normalized_overlapping.pdf"), width=3, height=8)
 
 ```
 
